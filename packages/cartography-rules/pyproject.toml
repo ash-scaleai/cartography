@@ -1,0 +1,34 @@
+# Template pyproject.toml for the future cartography-rules standalone package.
+# This file is NOT used by the monorepo build -- it documents how the package
+# would be published independently.
+
+[build-system]
+requires = ["setuptools", "setuptools-scm", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cartography-rules"
+version = "0.1.0"
+description = "Security rules engine for Cartography: execute compliance frameworks against your Neo4j graph and present findings."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+
+dependencies = [
+    "cartography-core>=0.1.0",
+    "neo4j>=6.0.0",
+    "typer>=0.9.0",
+    "pydantic>=2.0.0",
+    "typing_extensions",
+]
+
+[project.scripts]
+cartography-rules = "cartography.rules.cli:main"
+
+[project.urls]
+Homepage = "https://cartography-cncf.github.io/cartography"
+Repository = "https://github.com/cartography-cncf/cartography"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["cartography.rules*"]

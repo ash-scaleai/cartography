@@ -1,0 +1,28 @@
+# Template pyproject.toml for the future cartography-core standalone package.
+# This file is NOT used by the monorepo build -- it documents how the package
+# would be published independently.
+
+[build-system]
+requires = ["setuptools", "setuptools-scm", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cartography-core"
+version = "0.1.0"
+description = "Shared graph-client and transaction utilities for Cartography packages."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+
+dependencies = [
+    "neo4j>=6.0.0",
+    "backoff>=2.1.2",
+]
+
+[project.urls]
+Homepage = "https://cartography-cncf.github.io/cartography"
+Repository = "https://github.com/cartography-cncf/cartography"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["cartography.core*", "cartography.client.core*"]

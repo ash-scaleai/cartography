@@ -1,0 +1,32 @@
+# Template pyproject.toml for the future cartography-driftdetect standalone package.
+# This file is NOT used by the monorepo build -- it documents how the package
+# would be published independently.
+
+[build-system]
+requires = ["setuptools", "setuptools-scm", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cartography-driftdetect"
+version = "0.1.0"
+description = "Drift detection for Cartography: compare point-in-time snapshots of your Neo4j graph to surface unexpected changes."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+
+dependencies = [
+    "cartography-core>=0.1.0",
+    "neo4j>=6.0.0",
+    "marshmallow>=3.0.0rc7",
+]
+
+[project.scripts]
+cartography-detectdrift = "cartography.driftdetect.cli:main"
+
+[project.urls]
+Homepage = "https://cartography-cncf.github.io/cartography"
+Repository = "https://github.com/cartography-cncf/cartography"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["cartography.driftdetect*"]
