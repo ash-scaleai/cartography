@@ -55,6 +55,7 @@ import cartography.intel.trivy
 import cartography.intel.ubuntu
 import cartography.intel.workday
 from cartography.config import Config
+from cartography.plugin import discover_plugins
 from cartography.stats import set_stats_client
 from cartography.util import STATUS_FAILURE
 from cartography.util import STATUS_SUCCESS
@@ -62,6 +63,10 @@ from cartography.util import STATUS_SUCCESS
 logger = logging.getLogger(__name__)
 
 
+# The hardcoded module registry is preserved for backward compatibility.
+# It is used as the canonical source when all built-in modules are installed
+# monolithically (the current default).  The plugin discovery system
+# (see ``cartography.plugin``) can augment or replace entries here.
 TOP_LEVEL_MODULES: OrderedDict[str, Callable[..., None]] = OrderedDict(
     {  # preserve order so that the default sync always runs `analysis` at the very end
         "create-indexes": cartography.intel.create_indexes.run,
@@ -111,6 +116,43 @@ TOP_LEVEL_MODULES: OrderedDict[str, Callable[..., None]] = OrderedDict(
         "analysis": cartography.intel.analysis.run,
     }
 )
+
+
+def get_all_modules() -> OrderedDict[str, Callable[..., None]]:
+    """Return all available modules by merging plugins with built-in modules.
+
+    Plugin entry points registered under the ``cartography.plugins`` group
+    take precedence over built-in modules with the same name.  If no plugins
+    are installed, this returns the same set as :data:`TOP_LEVEL_MODULES`.
+
+    The result is *not* cached so that tests can manipulate entry points
+    without stale state.
+
+    Returns:
+        An :class:`~collections.OrderedDict` mapping module names to callables.
+    """
+    discovered = discover_plugins()
+
+    # Merge: start with hardcoded TOP_LEVEL_MODULES as the base, then overlay
+    # any plugin-discovered modules (plugins win on name collisions).
+    merged: OrderedDict[str, Callable[..., None]] = OrderedDict()
+    for name, func in TOP_LEVEL_MODULES.items():
+        merged[name] = discovered.get(name, func)
+
+    # Add any plugin-only modules that are NOT in the hardcoded list.
+    for name, func in discovered.items():
+        if name not in merged:
+            # Insert before 'ontology' and 'analysis' to preserve ordering.
+            # We'll rebuild the tail after inserting.
+            merged[name] = func
+
+    # Ensure ontology + analysis remain last.
+    for tail_key in ("ontology", "analysis"):
+        if tail_key in merged:
+            val = merged.pop(tail_key)
+            merged[tail_key] = val
+
+    return merged
 
 
 class Sync:
@@ -558,9 +600,9 @@ def build_default_sync() -> Sync:
     Build the default cartography sync with all available intelligence modules.
 
     This function creates a Sync instance configured with all intelligence
-    modules shipped with cartography. The modules are added in a specific
-    order to ensure proper execution sequence, with 'create-indexes' first
-    and 'analysis' last.
+    modules available via both plugin discovery and the built-in module
+    registry.  Plugin-discovered modules take precedence over built-in
+    modules with the same name.
 
     Returns:
         A fully configured Sync instance with all available intelligence modules.
@@ -576,20 +618,20 @@ def build_default_sync() -> Sync:
         >>> print(f"Default sync includes {len(stage_names)} stages")
 
     Note:
-        The default sync includes all modules defined in TOP_LEVEL_MODULES,
-        which encompasses cloud providers (AWS, GCP, Azure), security tools
-        (CrowdStrike, Okta), development platforms (GitHub), and analysis
-        capabilities. This provides comprehensive infrastructure mapping
-        out of the box.
+        The default sync includes all modules defined in TOP_LEVEL_MODULES
+        plus any additional modules registered via the ``cartography.plugins``
+        entry point group.  This provides comprehensive infrastructure mapping
+        out of the box while allowing third-party plugins to contribute.
 
         For custom sync configurations with specific modules, use build_sync()
         with a selected modules string instead.
     """
+    all_modules = get_all_modules()
     sync = Sync()
     sync.add_stages(
         [
             (stage_name, stage_func)
-            for stage_name, stage_func in TOP_LEVEL_MODULES.items()
+            for stage_name, stage_func in all_modules.items()
         ],
     )
     return sync
@@ -600,7 +642,8 @@ def parse_and_validate_selected_modules(selected_modules: str) -> list[str]:
     Parse and validate user-selected modules from comma-separated string.
 
     This function takes a comma-separated string of module names provided by
-    the user and validates that each module exists in the available modules.
+    the user and validates that each module exists in the available modules
+    (including both built-in and plugin-discovered modules).
     It returns a clean list of validated module names.
 
     Args:
@@ -608,7 +651,7 @@ def parse_and_validate_selected_modules(selected_modules: str) -> list[str]:
                          Module names will be stripped of whitespace.
 
     Returns:
-        A list of validated module names that exist in TOP_LEVEL_MODULES.
+        A list of validated module names that exist in the available modules.
 
     Raises:
         ValueError: If any specified module is not found in the available modules.
@@ -616,17 +659,18 @@ def parse_and_validate_selected_modules(selected_modules: str) -> list[str]:
 
     Note:
         Module names are case-sensitive and must exactly match those defined
-        in TOP_LEVEL_MODULES. The function is tolerant of whitespace around
-        commas but requires exact name matches for validation.
+        in the available module set. The function is tolerant of whitespace
+        around commas but requires exact name matches for validation.
     """
+    all_modules = get_all_modules()
     validated_modules: list[str] = []
     for module in selected_modules.split(","):
         module = module.strip()
 
-        if module in TOP_LEVEL_MODULES.keys():
+        if module in all_modules:
             validated_modules.append(module)
         else:
-            valid_modules = ", ".join(TOP_LEVEL_MODULES.keys())
+            valid_modules = ", ".join(all_modules.keys())
             raise ValueError(
                 f'Error parsing `selected_modules`. You specified "{selected_modules}". '
                 f"Please check that your string is formatted properly. "
@@ -643,6 +687,7 @@ def build_sync(selected_modules_as_str: str) -> Sync:
     This function creates a Sync instance configured only with the modules
     specified in the comma-separated string. It provides a way to run a
     subset of available intelligence modules rather than the full default set.
+    Both built-in and plugin-discovered modules can be selected.
 
     Args:
         selected_modules_as_str: A comma-separated string of module names to include
@@ -675,9 +720,10 @@ def build_sync(selected_modules_as_str: str) -> Sync:
         last for optimal results. The function validates all module names
         before creating the sync instance.
     """
+    all_modules = get_all_modules()
     selected_modules = parse_and_validate_selected_modules(selected_modules_as_str)
     sync = Sync()
     sync.add_stages(
-        [(sync_name, TOP_LEVEL_MODULES[sync_name]) for sync_name in selected_modules],
+        [(sync_name, all_modules[sync_name]) for sync_name in selected_modules],
     )
     return sync

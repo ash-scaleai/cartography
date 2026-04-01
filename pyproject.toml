@@ -150,6 +150,18 @@ cartography = "cartography.cli:main"
 cartography-detectdrift = "cartography.driftdetect.cli:main"
 cartography-rules = "cartography.rules.cli:main"
 
+# Plugin entry points: each built-in provider registers itself here so that the
+# plugin discovery system (cartography.plugin) can find it.  Third-party plugin
+# packages should declare their own entry points in this same group.
+#
+# Example for a hypothetical external package "cartography-plugin-acme":
+#   [project.entry-points."cartography.plugins"]
+#   acme = "cartography_plugin_acme:start_acme_ingestion"
+[project.entry-points."cartography.plugins"]
+aws = "cartography.intel.aws:start_aws_ingestion"
+github = "cartography.intel.github:start_github_ingestion"
+gcp = "cartography.intel.gcp:start_gcp_ingestion"
+
 [tool.setuptools.package-data]
 "cartography" = ["py.typed"]
 "cartography.data" = ["*.cypher", "*.yaml"]
