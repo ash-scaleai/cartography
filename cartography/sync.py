@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 import time
@@ -259,6 +260,102 @@ class Sync:
         logger.info("Finishing sync with update tag '%d'", config.update_tag)
         return STATUS_SUCCESS
 
+    async def run_async(
+        self,
+        neo4j_driver: neo4j.Driver,
+        config: Config,
+    ) -> int:
+        """
+        Execute configured stages with concurrent API fetches using asyncio.
+
+        Independent provider stages (those between 'create-indexes' and
+        'analysis'/'ontology') are dispatched concurrently via
+        ``asyncio.gather()``.  Each stage function is wrapped with
+        ``asyncio.to_thread()`` so existing synchronous provider code runs
+        in a thread-pool without modification.
+
+        Stages that must run in a fixed position -- 'create-indexes' at the
+        start, 'ontology' and 'analysis' at the end -- are still executed
+        sequentially.
+
+        Args:
+            neo4j_driver: A Neo4j driver instance for database connectivity.
+            config: Configuration object containing sync parameters.
+
+        Returns:
+            STATUS_SUCCESS (0) if all stages complete successfully.
+        """
+        logger.info(
+            "Starting async sync with update tag '%d'", config.update_tag,
+        )
+
+        # Partition stages into sequential-before, concurrent, sequential-after
+        sequential_before: list[tuple[str, Callable]] = []
+        concurrent: list[tuple[str, Callable]] = []
+        sequential_after: list[tuple[str, Callable]] = []
+        _after_names = {"analysis", "ontology"}
+
+        stage_items = list(self._stages.items())
+        # 'create-indexes' must be first and sequential
+        idx = 0
+        if stage_items and stage_items[0][0] == "create-indexes":
+            sequential_before.append(stage_items[0])
+            idx = 1
+
+        for name, func in stage_items[idx:]:
+            if name in _after_names:
+                sequential_after.append((name, func))
+            else:
+                concurrent.append((name, func))
+
+        with neo4j_driver.session(database=config.neo4j_database) as neo4j_session:
+            # 1. Run sequential-before stages
+            for stage_name, stage_func in sequential_before:
+                logger.info("Starting sync stage '%s'", stage_name)
+                stage_func(neo4j_session, config)
+                logger.info("Finishing sync stage '%s'", stage_name)
+
+            # 2. Run concurrent provider stages
+            if concurrent:
+                concurrent_names = [name for name, _ in concurrent]
+                logger.info(
+                    "Running %d stages concurrently: %s",
+                    len(concurrent),
+                    ", ".join(concurrent_names),
+                )
+
+                async def _run_stage(name: str, func: Callable) -> None:
+                    logger.info("Starting async stage '%s'", name)
+                    try:
+                        await asyncio.to_thread(func, neo4j_session, config)
+                    except (KeyboardInterrupt, SystemExit):
+                        logger.warning(
+                            "Sync interrupted during async stage '%s'.", name,
+                        )
+                        raise
+                    except Exception:
+                        logger.exception(
+                            "Unhandled exception during async stage '%s'",
+                            name,
+                        )
+                        raise
+                    logger.info("Finishing async stage '%s'", name)
+
+                await asyncio.gather(
+                    *[_run_stage(name, func) for name, func in concurrent],
+                )
+
+            # 3. Run sequential-after stages
+            for stage_name, stage_func in sequential_after:
+                logger.info("Starting sync stage '%s'", stage_name)
+                stage_func(neo4j_session, config)
+                logger.info("Finishing sync stage '%s'", stage_name)
+
+        logger.info(
+            "Finishing async sync with update tag '%d'", config.update_tag,
+        )
+        return STATUS_SUCCESS
+
     @classmethod
     def list_intel_modules(cls) -> OrderedDict:
         """
@@ -450,6 +547,9 @@ def run_with_config(sync: Sync, config: Config) -> int:
     default_update_tag = int(time.time())
     if not config.update_tag:
         config.update_tag = default_update_tag
+    if getattr(config, 'async_fetch', False):
+        logger.info("Async fetch mode enabled -- running concurrent provider stages.")
+        return asyncio.run(sync.run_async(neo4j_driver, config))
     return sync.run(neo4j_driver, config)
 
 

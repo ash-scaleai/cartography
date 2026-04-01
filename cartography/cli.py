@@ -345,6 +345,18 @@ class CLI:
                     rich_help_panel=PANEL_CORE,
                 ),
             ] = None,
+            async_fetch: Annotated[
+                bool,
+                typer.Option(
+                    "--async-fetch",
+                    help=(
+                        "Run independent provider sync stages concurrently using asyncio. "
+                        "Stages like 'create-indexes' and 'analysis' still run sequentially. "
+                        "This is an opt-in experimental feature; the default is sequential execution."
+                    ),
+                    rich_help_panel=PANEL_CORE,
+                ),
+            ] = False,
             # =================================================================
             # Neo4j Connection Options
             # =================================================================
@@ -2368,6 +2380,7 @@ class CLI:
                 slack_channels_memberships=slack_channels_memberships,
                 ubuntu_security_enabled=ubuntu_security_enabled,
                 ubuntu_security_api_url=ubuntu_security_api_url,
+                async_fetch=async_fetch,
             )
 
             # Run the sync
