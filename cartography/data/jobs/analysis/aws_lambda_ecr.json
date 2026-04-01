@@ -1,4 +1,5 @@
 {
+    "__deprecated__": "This JSON analysis job is deprecated. Use the schema-declared equivalent at cartography.models.computed_relationships.aws_lambda_ecr.AWS_LAMBDA_ECR_ANALYSIS",
     "name": "Lambda functions with ECR images",
     "statements": [
         {

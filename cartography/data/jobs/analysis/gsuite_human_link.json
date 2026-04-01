@@ -1,4 +1,5 @@
 {
+  "__deprecated__": "This JSON analysis job is deprecated. Use the schema-declared equivalent at cartography.models.computed_relationships.gsuite_human_link.GSUITE_HUMAN_LINK_ANALYSIS",
   "statements": [
     {
       "query": "MATCH (human:Human), (guser:GSuiteUser) WHERE human.email = guser.email MERGE (human)-[r:IDENTITY_GSUITE]->(guser) ON CREATE SET r.firstseen = $UPDATE_TAG SET r.lastupdated = $UPDATE_TAG",

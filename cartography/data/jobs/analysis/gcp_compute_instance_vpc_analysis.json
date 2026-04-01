@@ -1,4 +1,5 @@
 {
+    "__deprecated__": "This JSON analysis job is deprecated. Use the schema-declared equivalent at cartography.models.computed_relationships.gcp_compute_instance_vpc.GCP_INSTANCE_VPC_ANALYSIS",
     "name": "GCP Instance to VPC derived relationship analysis",
     "statements": [
         {
