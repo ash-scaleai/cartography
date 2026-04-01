@@ -1,7 +1,22 @@
+"""
+Core CLI module for cartography.
+
+This module contains the CLI class, core (non-provider) options, and the main
+entrypoint. Provider-specific options are defined in each provider's cli.py
+module under cartography/intel/<provider>/cli.py.
+
+Each provider CLI module exports:
+    - PANEL: str - the help panel name
+    - MODULE_NAME: str - the module name for --selected-modules filtering
+    - OPTION_DEFINITIONS: list of option specs
+    - process_cli_args(args) -> dict: processes raw CLI values into Config kwargs
+"""
 import getpass
 import logging
 import os
 import sys
+from types import ModuleType
+from typing import Any
 from typing import TYPE_CHECKING
 
 import typer
@@ -20,103 +35,92 @@ STATUS_SUCCESS = 0
 STATUS_FAILURE = 1
 STATUS_KEYBOARD_INTERRUPT = 130
 
-# Help Panel Names - Used to organize options in --help output
+# Help Panel Names for non-provider options
 PANEL_CORE = "Core Options"
 PANEL_NEO4J = "Neo4j Connection"
-PANEL_AWS = "AWS Options"
-PANEL_AZURE = "Azure Options"
-PANEL_ENTRA = "Entra ID Options"
-PANEL_GCP = "GCP Options"
-PANEL_OCI = "OCI Options"
-PANEL_OKTA = "Okta Options"
-PANEL_GITHUB = "GitHub Options"
-PANEL_GITLAB = "GitLab Options"
-PANEL_GSUITE = "GSuite Options"
-PANEL_GOOGLE_WORKSPACE = "Google Workspace Options"
-PANEL_DIGITALOCEAN = "DigitalOcean Options"
-PANEL_CROWDSTRIKE = "CrowdStrike Options"
-PANEL_JAMF = "Jamf Options"
-PANEL_KANDJI = "Kandji Options"
-PANEL_KUBERNETES = "Kubernetes Options"
-PANEL_CVE = "CVE Options"
-PANEL_PAGERDUTY = "PagerDuty Options"
-PANEL_LASTPASS = "LastPass Options"
-PANEL_BIGFIX = "BigFix Options"
-PANEL_DUO = "Duo Options"
-PANEL_WORKDAY = "Workday Options"
-PANEL_SEMGREP = "Semgrep Options"
-PANEL_SNIPEIT = "SnipeIT Options"
-PANEL_CLOUDFLARE = "Cloudflare Options"
-PANEL_TAILSCALE = "Tailscale Options"
-PANEL_OPENAI = "OpenAI Options"
-PANEL_ANTHROPIC = "Anthropic Options"
-PANEL_AIRBYTE = "Airbyte Options"
-PANEL_DOCKER_SCOUT = "Docker Scout Options"
-PANEL_TRIVY = "Trivy Options"
-PANEL_SYFT = "Syft Options"
-PANEL_AIBOM = "AIBOM Options"
-PANEL_UBUNTU = "Ubuntu Security Options"
-PANEL_ONTOLOGY = "Ontology Options"
-PANEL_SCALEWAY = "Scaleway Options"
-PANEL_SENTINELONE = "SentinelOne Options"
-PANEL_KEYCLOAK = "Keycloak Options"
-PANEL_SLACK = "Slack Options"
-PANEL_SENTRY = "Sentry Options"
-PANEL_SUBIMAGE = "SubImage Options"
-PANEL_SPACELIFT = "Spacelift Options"
-PANEL_JUMPCLOUD = "JumpCloud Options"
 PANEL_STATSD = "StatsD Metrics"
 PANEL_ANALYSIS = "Analysis Options"
 
-# Mapping of module names to their help panels
-MODULE_PANELS = {
-    "aws": PANEL_AWS,
-    "azure": PANEL_AZURE,
-    "entra": PANEL_ENTRA,
-    "gcp": PANEL_GCP,
-    "oci": PANEL_OCI,
-    "okta": PANEL_OKTA,
-    "github": PANEL_GITHUB,
-    "gitlab": PANEL_GITLAB,
-    "gsuite": PANEL_GSUITE,
-    "googleworkspace": PANEL_GOOGLE_WORKSPACE,
-    "digitalocean": PANEL_DIGITALOCEAN,
-    "crowdstrike": PANEL_CROWDSTRIKE,
-    "jamf": PANEL_JAMF,
-    "kandji": PANEL_KANDJI,
-    "kubernetes": PANEL_KUBERNETES,
-    "cve": PANEL_CVE,
-    "pagerduty": PANEL_PAGERDUTY,
-    "jumpcloud": PANEL_JUMPCLOUD,
-    "lastpass": PANEL_LASTPASS,
-    "bigfix": PANEL_BIGFIX,
-    "duo": PANEL_DUO,
-    "workday": PANEL_WORKDAY,
-    "semgrep": PANEL_SEMGREP,
-    "snipeit": PANEL_SNIPEIT,
-    "cloudflare": PANEL_CLOUDFLARE,
-    "tailscale": PANEL_TAILSCALE,
-    "openai": PANEL_OPENAI,
-    "anthropic": PANEL_ANTHROPIC,
-    "airbyte": PANEL_AIRBYTE,
-    "docker_scout": PANEL_DOCKER_SCOUT,
-    "trivy": PANEL_TRIVY,
-    "syft": PANEL_SYFT,
-    "aibom": PANEL_AIBOM,
-    "ubuntu": PANEL_UBUNTU,
-    "ontology": PANEL_ONTOLOGY,
-    "scaleway": PANEL_SCALEWAY,
-    "sentry": PANEL_SENTRY,
-    "sentinelone": PANEL_SENTINELONE,
-    "keycloak": PANEL_KEYCLOAK,
-    "slack": PANEL_SLACK,
-    "subimage": PANEL_SUBIMAGE,
-    "spacelift": PANEL_SPACELIFT,
-    "analysis": PANEL_ANALYSIS,
-}
-
 # Panels that should always be shown (not module-specific)
 ALWAYS_SHOW_PANELS = {PANEL_CORE, PANEL_NEO4J, PANEL_STATSD, PANEL_ANALYSIS}
+
+# Registry of all provider CLI modules.
+# Each entry maps a module name to its import path.
+# These are imported lazily when building the CLI.
+PROVIDER_CLI_MODULES: list[str] = [
+    "cartography.intel.aws.cli",
+    "cartography.intel.azure.cli",
+    "cartography.intel.entra.cli",
+    "cartography.intel.gcp.cli",
+    "cartography.intel.oci.cli",
+    "cartography.intel.okta.cli",
+    "cartography.intel.github.cli",
+    "cartography.intel.gitlab.cli",
+    "cartography.intel.digitalocean.cli",
+    "cartography.intel.crowdstrike.cli",
+    "cartography.intel.jamf.cli",
+    "cartography.intel.kandji.cli",
+    "cartography.intel.kubernetes.cli",
+    "cartography.intel.cve.cli",
+    "cartography.intel.pagerduty.cli",
+    "cartography.intel.gsuite.cli",
+    "cartography.intel.googleworkspace.cli",
+    "cartography.intel.lastpass.cli",
+    "cartography.intel.jumpcloud.cli",
+    "cartography.intel.bigfix.cli",
+    "cartography.intel.duo.cli",
+    "cartography.intel.workday.cli",
+    "cartography.intel.semgrep.cli",
+    "cartography.intel.snipeit.cli",
+    "cartography.intel.cloudflare.cli",
+    "cartography.intel.tailscale.cli",
+    "cartography.intel.openai.cli",
+    "cartography.intel.anthropic.cli",
+    "cartography.intel.sentry.cli",
+    "cartography.intel.subimage.cli",
+    "cartography.intel.airbyte.cli",
+    "cartography.intel.docker_scout.cli",
+    "cartography.intel.trivy.cli",
+    "cartography.intel.syft.cli",
+    "cartography.intel.aibom.cli",
+    "cartography.intel.ubuntu.cli",
+    "cartography.intel.ontology.cli",
+    "cartography.intel.scaleway.cli",
+    "cartography.intel.sentinelone.cli",
+    "cartography.intel.keycloak.cli",
+    "cartography.intel.slack.cli",
+    "cartography.intel.spacelift.cli",
+]
+
+
+def _load_provider_cli_modules() -> list[ModuleType]:
+    """
+    Import and return all provider CLI modules.
+
+    Returns:
+        List of imported provider CLI module objects.
+    """
+    import importlib
+    modules = []
+    for module_path in PROVIDER_CLI_MODULES:
+        mod = importlib.import_module(module_path)
+        modules.append(mod)
+    return modules
+
+
+def _build_module_panels_map(provider_modules: list[ModuleType]) -> dict[str, str]:
+    """
+    Build the MODULE_PANELS mapping from loaded provider modules.
+
+    Returns:
+        Dict mapping module name -> panel name.
+    """
+    panels = {}
+    for mod in provider_modules:
+        panels[mod.MODULE_NAME] = mod.PANEL
+    # Add non-provider panels
+    panels["analysis"] = PANEL_ANALYSIS
+    return panels
 
 
 def _version_callback(value: bool) -> None:
@@ -133,20 +137,16 @@ def _version_callback(value: bool) -> None:
     raise typer.Exit(code=0)
 
 
-def _parse_selected_modules_from_argv(argv: list[str]) -> set[str]:
+def _parse_selected_modules_from_argv(
+    argv: list[str],
+    module_panels: dict[str, str],
+) -> set[str]:
     """
     Pre-parse argv to extract --selected-modules value for dynamic help visibility.
 
     Returns:
         Set of visible panel names. If no modules specified, returns all panels.
     """
-    # We pre-parse argv to extract --selected-modules BEFORE building the Typer app.
-    # This allows us to show only relevant options in --help output.
-    # Example: `cartography --selected-modules aws --help` shows only AWS options.
-
-    # Why pre-parse? Typer generates help BEFORE parsing arguments, so we need to
-    # know selected modules earlier. Hidden options still work (backward compat),
-    # they just don't clutter --help.
     selected_modules: str | None = None
 
     for i, arg in enumerate(argv):
@@ -158,15 +158,13 @@ def _parse_selected_modules_from_argv(argv: list[str]) -> set[str]:
             break
 
     if not selected_modules:
-        # No filter: show all panels
-        return set(MODULE_PANELS.values()) | ALWAYS_SHOW_PANELS
+        return set(module_panels.values()) | ALWAYS_SHOW_PANELS
 
-    # Build set of visible panels from selected modules
     visible_panels = set(ALWAYS_SHOW_PANELS)
     for module in selected_modules.split(","):
         module = module.strip().lower()
-        if module in MODULE_PANELS:
-            visible_panels.add(MODULE_PANELS[module])
+        if module in module_panels:
+            visible_panels.add(module_panels[module])
 
     return visible_panels
 
@@ -225,11 +223,15 @@ class CLI:
             An integer exit code. Returns 0 for successful execution, or a non-zero
             value for errors or keyboard interruption.
         """
+        # Load provider CLI modules
+        provider_modules = _load_provider_cli_modules()
+        module_panels = _build_module_panels_map(provider_modules)
+
         # Pre-parse argv to determine which help panels to show
-        visible_panels = _parse_selected_modules_from_argv(argv)
+        visible_panels = _parse_selected_modules_from_argv(argv, module_panels)
 
         # Build the Typer app with our sync object in closure
-        app = self._build_app(visible_panels)
+        app = self._build_app(visible_panels, provider_modules)
 
         # Typer doesn't return exit codes directly, so we catch SystemExit
         try:
@@ -253,13 +255,22 @@ class CLI:
             logger.error("Cartography failed: %s", e)
             return STATUS_FAILURE
 
-    def _build_app(self, visible_panels: set[str]) -> typer.Typer:
+    def _build_app(
+        self,
+        visible_panels: set[str],
+        provider_modules: list[ModuleType],
+    ) -> typer.Typer:
         """
         Build the Typer application with all CLI options.
+
+        Provider options are registered from each provider's CLI module via their
+        OPTION_DEFINITIONS. Core options (logging, Neo4j, StatsD, analysis) are
+        defined directly here.
 
         Args:
             visible_panels: Set of panel names to show in help. Options in other
                 panels are hidden but still functional (backward compatibility).
+            provider_modules: List of loaded provider CLI modules.
 
         Returns:
             A configured Typer application.
@@ -280,6 +291,8 @@ class CLI:
 
         # Store reference to self for use in the command function
         cli_instance = self
+        # Capture provider modules for use in the command closure
+        _provider_modules = provider_modules
 
         @app.command()  # type: ignore[misc]
         def run(
@@ -425,7 +438,7 @@ class CLI:
                 ),
             ] = None,
             # =================================================================
-            # AWS Options
+            # AWS Options (from cartography.intel.aws.cli)
             # =================================================================
             aws_sync_all_profiles: Annotated[
                 bool,
@@ -436,8 +449,8 @@ class CLI:
                         "Cartography will discover all configured AWS named profiles and run the AWS sync "
                         'for each profile not named "default".'
                     ),
-                    rich_help_panel=PANEL_AWS,
-                    hidden=PANEL_AWS not in visible_panels,
+                    rich_help_panel="AWS Options",
+                    hidden="AWS Options" not in visible_panels,
                 ),
             ] = False,
             aws_regions: Annotated[
@@ -449,8 +462,8 @@ class CLI:
                         'Example: "us-east-1,us-east-2". '
                         "CAUTION: Previously synced regions not in this list will have their assets deleted."
                     ),
-                    rich_help_panel=PANEL_AWS,
-                    hidden=PANEL_AWS not in visible_panels,
+                    rich_help_panel="AWS Options",
+                    hidden="AWS Options" not in visible_panels,
                 ),
             ] = None,
             aws_best_effort_mode: Annotated[
@@ -458,8 +471,8 @@ class CLI:
                 typer.Option(
                     "--aws-best-effort-mode",
                     help="Continue syncing other accounts if one fails, raising exceptions at the end.",
-                    rich_help_panel=PANEL_AWS,
-                    hidden=PANEL_AWS not in visible_panels,
+                    rich_help_panel="AWS Options",
+                    hidden="AWS Options" not in visible_panels,
                 ),
             ] = False,
             aws_cloudtrail_management_events_lookback_hours: Annotated[
@@ -467,8 +480,8 @@ class CLI:
                 typer.Option(
                     "--aws-cloudtrail-management-events-lookback-hours",
                     help="Number of hours back to retrieve CloudTrail management events. Not retrieved if not specified.",
-                    rich_help_panel=PANEL_AWS,
-                    hidden=PANEL_AWS not in visible_panels,
+                    rich_help_panel="AWS Options",
+                    hidden="AWS Options" not in visible_panels,
                 ),
             ] = None,
             aws_requested_syncs: Annotated[
@@ -479,8 +492,8 @@ class CLI:
                         "Comma-separated list of AWS resources to sync. "
                         'Example: "ecr,s3,ec2:instance". See cartography.intel.aws.resources for full list.'
                     ),
-                    rich_help_panel=PANEL_AWS,
-                    hidden=PANEL_AWS not in visible_panels,
+                    rich_help_panel="AWS Options",
+                    hidden="AWS Options" not in visible_panels,
                 ),
             ] = None,
             aws_guardduty_severity_threshold: Annotated[
@@ -488,8 +501,8 @@ class CLI:
                 typer.Option(
                     "--aws-guardduty-severity-threshold",
                     help="GuardDuty severity threshold. Valid values: LOW, MEDIUM, HIGH, CRITICAL.",
-                    rich_help_panel=PANEL_AWS,
-                    hidden=PANEL_AWS not in visible_panels,
+                    rich_help_panel="AWS Options",
+                    hidden="AWS Options" not in visible_panels,
                 ),
             ] = None,
             experimental_aws_inspector_batch: Annotated[
@@ -497,8 +510,8 @@ class CLI:
                 typer.Option(
                     "--experimental-aws-inspector-batch",
                     help="[EXPERIMENTAL] Batch size for AWS Inspector findings sync. Default: 1000.",
-                    rich_help_panel=PANEL_AWS,
-                    hidden=PANEL_AWS not in visible_panels,
+                    rich_help_panel="AWS Options",
+                    hidden="AWS Options" not in visible_panels,
                 ),
             ] = 1000,
             aws_tagging_api_cleanup_batch: Annotated[
@@ -506,8 +519,8 @@ class CLI:
                 typer.Option(
                     "--aws-tagging-api-cleanup-batch",
                     help="Batch size for Resource Groups Tagging API cleanup (AWSTag nodes). Default: 1000.",
-                    rich_help_panel=PANEL_AWS,
-                    hidden=PANEL_AWS not in visible_panels,
+                    rich_help_panel="AWS Options",
+                    hidden="AWS Options" not in visible_panels,
                 ),
             ] = 1000,
             permission_relationships_file: Annotated[
@@ -515,20 +528,20 @@ class CLI:
                 typer.Option(
                     "--permission-relationships-file",
                     help="Path to the AWS permission relationships mapping file.",
-                    rich_help_panel=PANEL_AWS,
-                    hidden=PANEL_AWS not in visible_panels,
+                    rich_help_panel="AWS Options",
+                    hidden="AWS Options" not in visible_panels,
                 ),
             ] = "cartography/data/permission_relationships.yaml",
             # =================================================================
-            # Azure Options
+            # Azure Options (from cartography.intel.azure.cli)
             # =================================================================
             azure_sync_all_subscriptions: Annotated[
                 bool,
                 typer.Option(
                     "--azure-sync-all-subscriptions",
                     help="Enable Azure sync for all discovered subscriptions.",
-                    rich_help_panel=PANEL_AZURE,
-                    hidden=PANEL_AZURE not in visible_panels,
+                    rich_help_panel="Azure Options",
+                    hidden="Azure Options" not in visible_panels,
                 ),
             ] = False,
             azure_sp_auth: Annotated[
@@ -536,8 +549,8 @@ class CLI:
                 typer.Option(
                     "--azure-sp-auth",
                     help="Use Service Principal authentication for Azure sync.",
-                    rich_help_panel=PANEL_AZURE,
-                    hidden=PANEL_AZURE not in visible_panels,
+                    rich_help_panel="Azure Options",
+                    hidden="Azure Options" not in visible_panels,
                 ),
             ] = False,
             azure_tenant_id: Annotated[
@@ -545,8 +558,8 @@ class CLI:
                 typer.Option(
                     "--azure-tenant-id",
                     help="Azure Tenant ID for Service Principal Authentication.",
-                    rich_help_panel=PANEL_AZURE,
-                    hidden=PANEL_AZURE not in visible_panels,
+                    rich_help_panel="Azure Options",
+                    hidden="Azure Options" not in visible_panels,
                 ),
             ] = None,
             azure_client_id: Annotated[
@@ -554,8 +567,8 @@ class CLI:
                 typer.Option(
                     "--azure-client-id",
                     help="Azure Client ID for Service Principal Authentication.",
-                    rich_help_panel=PANEL_AZURE,
-                    hidden=PANEL_AZURE not in visible_panels,
+                    rich_help_panel="Azure Options",
+                    hidden="Azure Options" not in visible_panels,
                 ),
             ] = None,
             azure_client_secret_env_var: Annotated[
@@ -563,8 +576,8 @@ class CLI:
                 typer.Option(
                     "--azure-client-secret-env-var",
                     help="Environment variable name containing Azure Client Secret.",
-                    rich_help_panel=PANEL_AZURE,
-                    hidden=PANEL_AZURE not in visible_panels,
+                    rich_help_panel="Azure Options",
+                    hidden="Azure Options" not in visible_panels,
                 ),
             ] = None,
             azure_subscription_id: Annotated[
@@ -572,8 +585,8 @@ class CLI:
                 typer.Option(
                     "--azure-subscription-id",
                     help="The Azure Subscription ID to sync.",
-                    rich_help_panel=PANEL_AZURE,
-                    hidden=PANEL_AZURE not in visible_panels,
+                    rich_help_panel="Azure Options",
+                    hidden="Azure Options" not in visible_panels,
                 ),
             ] = None,
             azure_permission_relationships_file: Annotated[
@@ -581,20 +594,20 @@ class CLI:
                 typer.Option(
                     "--azure-permission-relationships-file",
                     help="Path to the Azure permission relationships mapping file.",
-                    rich_help_panel=PANEL_AZURE,
-                    hidden=PANEL_AZURE not in visible_panels,
+                    rich_help_panel="Azure Options",
+                    hidden="Azure Options" not in visible_panels,
                 ),
             ] = "cartography/data/azure_permission_relationships.yaml",
             # =================================================================
-            # Entra ID Options
+            # Entra ID Options (from cartography.intel.entra.cli)
             # =================================================================
             entra_tenant_id: Annotated[
                 str | None,
                 typer.Option(
                     "--entra-tenant-id",
                     help="Entra Tenant ID for Service Principal Authentication.",
-                    rich_help_panel=PANEL_ENTRA,
-                    hidden=PANEL_ENTRA not in visible_panels,
+                    rich_help_panel="Entra ID Options",
+                    hidden="Entra ID Options" not in visible_panels,
                 ),
             ] = None,
             entra_client_id: Annotated[
@@ -602,8 +615,8 @@ class CLI:
                 typer.Option(
                     "--entra-client-id",
                     help="Entra Client ID for Service Principal Authentication.",
-                    rich_help_panel=PANEL_ENTRA,
-                    hidden=PANEL_ENTRA not in visible_panels,
+                    rich_help_panel="Entra ID Options",
+                    hidden="Entra ID Options" not in visible_panels,
                 ),
             ] = None,
             entra_client_secret_env_var: Annotated[
@@ -611,12 +624,12 @@ class CLI:
                 typer.Option(
                     "--entra-client-secret-env-var",
                     help="Environment variable name containing Entra Client Secret.",
-                    rich_help_panel=PANEL_ENTRA,
-                    hidden=PANEL_ENTRA not in visible_panels,
+                    rich_help_panel="Entra ID Options",
+                    hidden="Entra ID Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # GCP Options
+            # GCP Options (from cartography.intel.gcp.cli)
             # =================================================================
             gcp_requested_syncs: Annotated[
                 str | None,
@@ -626,8 +639,8 @@ class CLI:
                         "Comma-separated list of GCP resources to sync. "
                         'Example: "compute,iam,storage". See cartography.intel.gcp.resources for full list.'
                     ),
-                    rich_help_panel=PANEL_GCP,
-                    hidden=PANEL_GCP not in visible_panels,
+                    rich_help_panel="GCP Options",
+                    hidden="GCP Options" not in visible_panels,
                 ),
             ] = None,
             gcp_permission_relationships_file: Annotated[
@@ -635,32 +648,32 @@ class CLI:
                 typer.Option(
                     "--gcp-permission-relationships-file",
                     help="Path to the GCP permission relationships mapping file.",
-                    rich_help_panel=PANEL_GCP,
-                    hidden=PANEL_GCP not in visible_panels,
+                    rich_help_panel="GCP Options",
+                    hidden="GCP Options" not in visible_panels,
                 ),
             ] = "cartography/data/gcp_permission_relationships.yaml",
             # =================================================================
-            # OCI Options
+            # OCI Options (from cartography.intel.oci.cli)
             # =================================================================
             oci_sync_all_profiles: Annotated[
                 bool,
                 typer.Option(
                     "--oci-sync-all-profiles",
                     help='Enable OCI sync for all discovered named profiles (excluding "DEFAULT").',
-                    rich_help_panel=PANEL_OCI,
-                    hidden=PANEL_OCI not in visible_panels,
+                    rich_help_panel="OCI Options",
+                    hidden="OCI Options" not in visible_panels,
                 ),
             ] = False,
             # =================================================================
-            # Okta Options
+            # Okta Options (from cartography.intel.okta.cli)
             # =================================================================
             okta_org_id: Annotated[
                 str | None,
                 typer.Option(
                     "--okta-org-id",
                     help="Okta organizational ID to sync. Required for Okta module.",
-                    rich_help_panel=PANEL_OKTA,
-                    hidden=PANEL_OKTA not in visible_panels,
+                    rich_help_panel="Okta Options",
+                    hidden="Okta Options" not in visible_panels,
                 ),
             ] = None,
             okta_api_key_env_var: Annotated[
@@ -668,8 +681,8 @@ class CLI:
                 typer.Option(
                     "--okta-api-key-env-var",
                     help="Environment variable name containing Okta API key.",
-                    rich_help_panel=PANEL_OKTA,
-                    hidden=PANEL_OKTA not in visible_panels,
+                    rich_help_panel="Okta Options",
+                    hidden="Okta Options" not in visible_panels,
                 ),
             ] = None,
             okta_base_domain: Annotated[
@@ -678,8 +691,8 @@ class CLI:
                     "--okta-base-domain",
                     help="Base domain for Okta API requests. Defaults to 'okta.com'. "
                     "Set this if your organization uses a custom Okta domain.",
-                    rich_help_panel=PANEL_OKTA,
-                    hidden=PANEL_OKTA not in visible_panels,
+                    rich_help_panel="Okta Options",
+                    hidden="Okta Options" not in visible_panels,
                 ),
             ] = "okta.com",
             okta_saml_role_regex: Annotated[
@@ -687,20 +700,20 @@ class CLI:
                 typer.Option(
                     "--okta-saml-role-regex",
                     help="Regex to map Okta groups to AWS roles. Must contain {{role}} and {{accountid}} tags.",
-                    rich_help_panel=PANEL_OKTA,
-                    hidden=PANEL_OKTA not in visible_panels,
+                    rich_help_panel="Okta Options",
+                    hidden="Okta Options" not in visible_panels,
                 ),
             ] = r"^aws\#\S+\#(?{{role}}[\w\-]+)\#(?{{accountid}}\d+)$",
             # =================================================================
-            # GitHub Options
+            # GitHub Options (from cartography.intel.github.cli)
             # =================================================================
             github_config_env_var: Annotated[
                 str | None,
                 typer.Option(
                     "--github-config-env-var",
                     help="Environment variable name containing Base64 encoded GitHub config.",
-                    rich_help_panel=PANEL_GITHUB,
-                    hidden=PANEL_GITHUB not in visible_panels,
+                    rich_help_panel="GitHub Options",
+                    hidden="GitHub Options" not in visible_panels,
                 ),
             ] = None,
             github_commit_lookback_days: Annotated[
@@ -708,20 +721,20 @@ class CLI:
                 typer.Option(
                     "--github-commit-lookback-days",
                     help="Number of days to look back for GitHub commit tracking. Default: 30.",
-                    rich_help_panel=PANEL_GITHUB,
-                    hidden=PANEL_GITHUB not in visible_panels,
+                    rich_help_panel="GitHub Options",
+                    hidden="GitHub Options" not in visible_panels,
                 ),
             ] = 30,
             # =================================================================
-            # GitLab Options
+            # GitLab Options (from cartography.intel.gitlab.cli)
             # =================================================================
             gitlab_url: Annotated[
                 str,
                 typer.Option(
                     "--gitlab-url",
                     help="GitLab instance URL. Defaults to https://gitlab.com.",
-                    rich_help_panel=PANEL_GITLAB,
-                    hidden=PANEL_GITLAB not in visible_panels,
+                    rich_help_panel="GitLab Options",
+                    hidden="GitLab Options" not in visible_panels,
                 ),
             ] = "https://gitlab.com",
             gitlab_token_env_var: Annotated[
@@ -729,8 +742,8 @@ class CLI:
                 typer.Option(
                     "--gitlab-token-env-var",
                     help="Environment variable name containing GitLab personal access token.",
-                    rich_help_panel=PANEL_GITLAB,
-                    hidden=PANEL_GITLAB not in visible_panels,
+                    rich_help_panel="GitLab Options",
+                    hidden="GitLab Options" not in visible_panels,
                 ),
             ] = None,
             gitlab_organization_id: Annotated[
@@ -738,8 +751,8 @@ class CLI:
                 typer.Option(
                     "--gitlab-organization-id",
                     help="GitLab organization (top-level group) ID to sync.",
-                    rich_help_panel=PANEL_GITLAB,
-                    hidden=PANEL_GITLAB not in visible_panels,
+                    rich_help_panel="GitLab Options",
+                    hidden="GitLab Options" not in visible_panels,
                 ),
             ] = None,
             gitlab_commits_since_days: Annotated[
@@ -747,32 +760,32 @@ class CLI:
                 typer.Option(
                     "--gitlab-commits-since-days",
                     help="Number of days of commit history to fetch. Default: 90.",
-                    rich_help_panel=PANEL_GITLAB,
-                    hidden=PANEL_GITLAB not in visible_panels,
+                    rich_help_panel="GitLab Options",
+                    hidden="GitLab Options" not in visible_panels,
                 ),
             ] = 90,
             # =================================================================
-            # DigitalOcean Options
+            # DigitalOcean Options (from cartography.intel.digitalocean.cli)
             # =================================================================
             digitalocean_token_env_var: Annotated[
                 str | None,
                 typer.Option(
                     "--digitalocean-token-env-var",
                     help="Environment variable name containing DigitalOcean access token.",
-                    rich_help_panel=PANEL_DIGITALOCEAN,
-                    hidden=PANEL_DIGITALOCEAN not in visible_panels,
+                    rich_help_panel="DigitalOcean Options",
+                    hidden="DigitalOcean Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # CrowdStrike Options
+            # CrowdStrike Options (from cartography.intel.crowdstrike.cli)
             # =================================================================
             crowdstrike_client_id_env_var: Annotated[
                 str | None,
                 typer.Option(
                     "--crowdstrike-client-id-env-var",
                     help="Environment variable name containing CrowdStrike client ID.",
-                    rich_help_panel=PANEL_CROWDSTRIKE,
-                    hidden=PANEL_CROWDSTRIKE not in visible_panels,
+                    rich_help_panel="CrowdStrike Options",
+                    hidden="CrowdStrike Options" not in visible_panels,
                 ),
             ] = None,
             crowdstrike_client_secret_env_var: Annotated[
@@ -780,8 +793,8 @@ class CLI:
                 typer.Option(
                     "--crowdstrike-client-secret-env-var",
                     help="Environment variable name containing CrowdStrike client secret.",
-                    rich_help_panel=PANEL_CROWDSTRIKE,
-                    hidden=PANEL_CROWDSTRIKE not in visible_panels,
+                    rich_help_panel="CrowdStrike Options",
+                    hidden="CrowdStrike Options" not in visible_panels,
                 ),
             ] = None,
             crowdstrike_api_url: Annotated[
@@ -789,20 +802,20 @@ class CLI:
                 typer.Option(
                     "--crowdstrike-api-url",
                     help="CrowdStrike API URL for self-hosted instances.",
-                    rich_help_panel=PANEL_CROWDSTRIKE,
-                    hidden=PANEL_CROWDSTRIKE not in visible_panels,
+                    rich_help_panel="CrowdStrike Options",
+                    hidden="CrowdStrike Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # Jamf Options
+            # Jamf Options (from cartography.intel.jamf.cli)
             # =================================================================
             jamf_base_uri: Annotated[
                 str | None,
                 typer.Option(
                     "--jamf-base-uri",
                     help="Jamf base URI, e.g. https://hostname.com/JSSResource.",
-                    rich_help_panel=PANEL_JAMF,
-                    hidden=PANEL_JAMF not in visible_panels,
+                    rich_help_panel="Jamf Options",
+                    hidden="Jamf Options" not in visible_panels,
                 ),
             ] = None,
             jamf_user: Annotated[
@@ -810,8 +823,8 @@ class CLI:
                 typer.Option(
                     "--jamf-user",
                     help="Username to authenticate to Jamf.",
-                    rich_help_panel=PANEL_JAMF,
-                    hidden=PANEL_JAMF not in visible_panels,
+                    rich_help_panel="Jamf Options",
+                    hidden="Jamf Options" not in visible_panels,
                 ),
             ] = None,
             jamf_password_env_var: Annotated[
@@ -819,20 +832,20 @@ class CLI:
                 typer.Option(
                     "--jamf-password-env-var",
                     help="Environment variable name containing Jamf password.",
-                    rich_help_panel=PANEL_JAMF,
-                    hidden=PANEL_JAMF not in visible_panels,
+                    rich_help_panel="Jamf Options",
+                    hidden="Jamf Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # Kandji Options
+            # Kandji Options (from cartography.intel.kandji.cli)
             # =================================================================
             kandji_base_uri: Annotated[
                 str | None,
                 typer.Option(
                     "--kandji-base-uri",
                     help="Kandji base URI, e.g. https://company.api.kandji.io.",
-                    rich_help_panel=PANEL_KANDJI,
-                    hidden=PANEL_KANDJI not in visible_panels,
+                    rich_help_panel="Kandji Options",
+                    hidden="Kandji Options" not in visible_panels,
                 ),
             ] = None,
             kandji_tenant_id: Annotated[
@@ -840,8 +853,8 @@ class CLI:
                 typer.Option(
                     "--kandji-tenant-id",
                     help="Kandji tenant ID.",
-                    rich_help_panel=PANEL_KANDJI,
-                    hidden=PANEL_KANDJI not in visible_panels,
+                    rich_help_panel="Kandji Options",
+                    hidden="Kandji Options" not in visible_panels,
                 ),
             ] = None,
             kandji_token_env_var: Annotated[
@@ -849,20 +862,20 @@ class CLI:
                 typer.Option(
                     "--kandji-token-env-var",
                     help="Environment variable name containing Kandji API token.",
-                    rich_help_panel=PANEL_KANDJI,
-                    hidden=PANEL_KANDJI not in visible_panels,
+                    rich_help_panel="Kandji Options",
+                    hidden="Kandji Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # Kubernetes Options
+            # Kubernetes Options (from cartography.intel.kubernetes.cli)
             # =================================================================
             k8s_kubeconfig: Annotated[
                 str | None,
                 typer.Option(
                     "--k8s-kubeconfig",
                     help="Path to kubeconfig file for K8s cluster(s).",
-                    rich_help_panel=PANEL_KUBERNETES,
-                    hidden=PANEL_KUBERNETES not in visible_panels,
+                    rich_help_panel="Kubernetes Options",
+                    hidden="Kubernetes Options" not in visible_panels,
                 ),
             ] = None,
             managed_kubernetes: Annotated[
@@ -870,20 +883,20 @@ class CLI:
                 typer.Option(
                     "--managed-kubernetes",
                     help="Type of managed Kubernetes service (e.g., 'eks').",
-                    rich_help_panel=PANEL_KUBERNETES,
-                    hidden=PANEL_KUBERNETES not in visible_panels,
+                    rich_help_panel="Kubernetes Options",
+                    hidden="Kubernetes Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # CVE Options
+            # CVE Options (from cartography.intel.cve.cli)
             # =================================================================
             nist_cve_url: Annotated[
                 str,
                 typer.Option(
                     "--nist-cve-url",
                     help="Base URL for NIST CVE data.",
-                    rich_help_panel=PANEL_CVE,
-                    hidden=PANEL_CVE not in visible_panels,
+                    rich_help_panel="CVE Options",
+                    hidden="CVE Options" not in visible_panels,
                 ),
             ] = "https://services.nvd.nist.gov/rest/json/cves/2.0/",
             cve_enabled: Annotated[
@@ -891,8 +904,8 @@ class CLI:
                 typer.Option(
                     "--cve-enabled",
                     help="Enable CVE data sync from NIST.",
-                    rich_help_panel=PANEL_CVE,
-                    hidden=PANEL_CVE not in visible_panels,
+                    rich_help_panel="CVE Options",
+                    hidden="CVE Options" not in visible_panels,
                 ),
             ] = False,
             cve_api_key_env_var: Annotated[
@@ -900,20 +913,20 @@ class CLI:
                 typer.Option(
                     "--cve-api-key-env-var",
                     help="Environment variable name containing NIST NVD API v2.0 key.",
-                    rich_help_panel=PANEL_CVE,
-                    hidden=PANEL_CVE not in visible_panels,
+                    rich_help_panel="CVE Options",
+                    hidden="CVE Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # PagerDuty Options
+            # PagerDuty Options (from cartography.intel.pagerduty.cli)
             # =================================================================
             pagerduty_api_key_env_var: Annotated[
                 str | None,
                 typer.Option(
                     "--pagerduty-api-key-env-var",
                     help="Environment variable name containing PagerDuty API key.",
-                    rich_help_panel=PANEL_PAGERDUTY,
-                    hidden=PANEL_PAGERDUTY not in visible_panels,
+                    rich_help_panel="PagerDuty Options",
+                    hidden="PagerDuty Options" not in visible_panels,
                 ),
             ] = None,
             pagerduty_request_timeout: Annotated[
@@ -921,20 +934,20 @@ class CLI:
                 typer.Option(
                     "--pagerduty-request-timeout",
                     help="Timeout in seconds for PagerDuty API requests.",
-                    rich_help_panel=PANEL_PAGERDUTY,
-                    hidden=PANEL_PAGERDUTY not in visible_panels,
+                    rich_help_panel="PagerDuty Options",
+                    hidden="PagerDuty Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # GSuite Options
+            # GSuite Options (from cartography.intel.gsuite.cli)
             # =================================================================
             gsuite_auth_method: Annotated[
                 str,
                 typer.Option(
                     "--gsuite-auth-method",
                     help='GSuite authentication method: "delegated", "oauth", or "default".',
-                    rich_help_panel=PANEL_GSUITE,
-                    hidden=PANEL_GSUITE not in visible_panels,
+                    rich_help_panel="GSuite Options",
+                    hidden="GSuite Options" not in visible_panels,
                 ),
             ] = "delegated",
             gsuite_tokens_env_var: Annotated[
@@ -942,20 +955,20 @@ class CLI:
                 typer.Option(
                     "--gsuite-tokens-env-var",
                     help="Environment variable name containing GSuite credentials.",
-                    rich_help_panel=PANEL_GSUITE,
-                    hidden=PANEL_GSUITE not in visible_panels,
+                    rich_help_panel="GSuite Options",
+                    hidden="GSuite Options" not in visible_panels,
                 ),
             ] = "GSUITE_GOOGLE_APPLICATION_CREDENTIALS",
             # =================================================================
-            # Google Workspace Options
+            # Google Workspace Options (from cartography.intel.googleworkspace.cli)
             # =================================================================
             googleworkspace_auth_method: Annotated[
                 str,
                 typer.Option(
                     "--googleworkspace-auth-method",
                     help='Google Workspace authentication method: "delegated", "oauth", or "default".',
-                    rich_help_panel=PANEL_GOOGLE_WORKSPACE,
-                    hidden=PANEL_GOOGLE_WORKSPACE not in visible_panels,
+                    rich_help_panel="Google Workspace Options",
+                    hidden="Google Workspace Options" not in visible_panels,
                 ),
             ] = "delegated",
             googleworkspace_tokens_env_var: Annotated[
@@ -963,20 +976,20 @@ class CLI:
                 typer.Option(
                     "--googleworkspace-tokens-env-var",
                     help="Environment variable name containing Google Workspace credentials.",
-                    rich_help_panel=PANEL_GOOGLE_WORKSPACE,
-                    hidden=PANEL_GOOGLE_WORKSPACE not in visible_panels,
+                    rich_help_panel="Google Workspace Options",
+                    hidden="Google Workspace Options" not in visible_panels,
                 ),
             ] = "GOOGLEWORKSPACE_GOOGLE_APPLICATION_CREDENTIALS",
             # =================================================================
-            # LastPass Options
+            # LastPass Options (from cartography.intel.lastpass.cli)
             # =================================================================
             lastpass_cid_env_var: Annotated[
                 str | None,
                 typer.Option(
                     "--lastpass-cid-env-var",
                     help="Environment variable name containing LastPass CID.",
-                    rich_help_panel=PANEL_LASTPASS,
-                    hidden=PANEL_LASTPASS not in visible_panels,
+                    rich_help_panel="LastPass Options",
+                    hidden="LastPass Options" not in visible_panels,
                 ),
             ] = None,
             lastpass_provhash_env_var: Annotated[
@@ -984,20 +997,20 @@ class CLI:
                 typer.Option(
                     "--lastpass-provhash-env-var",
                     help="Environment variable name containing LastPass provhash.",
-                    rich_help_panel=PANEL_LASTPASS,
-                    hidden=PANEL_LASTPASS not in visible_panels,
+                    rich_help_panel="LastPass Options",
+                    hidden="LastPass Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # JumpCloud Options
+            # JumpCloud Options (from cartography.intel.jumpcloud.cli)
             # =================================================================
             jumpcloud_api_key_env_var: Annotated[
                 str | None,
                 typer.Option(
                     "--jumpcloud-api-key-env-var",
                     help="Environment variable name containing JumpCloud API key.",
-                    rich_help_panel=PANEL_JUMPCLOUD,
-                    hidden=PANEL_JUMPCLOUD not in visible_panels,
+                    rich_help_panel="JumpCloud Options",
+                    hidden="JumpCloud Options" not in visible_panels,
                 ),
             ] = None,
             jumpcloud_org_id: Annotated[
@@ -1005,20 +1018,20 @@ class CLI:
                 typer.Option(
                     "--jumpcloud-org-id",
                     help="JumpCloud organization ID used as the tenant identifier.",
-                    rich_help_panel=PANEL_JUMPCLOUD,
-                    hidden=PANEL_JUMPCLOUD not in visible_panels,
+                    rich_help_panel="JumpCloud Options",
+                    hidden="JumpCloud Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # BigFix Options
+            # BigFix Options (from cartography.intel.bigfix.cli)
             # =================================================================
             bigfix_username: Annotated[
                 str | None,
                 typer.Option(
                     "--bigfix-username",
                     help="BigFix username for authentication.",
-                    rich_help_panel=PANEL_BIGFIX,
-                    hidden=PANEL_BIGFIX not in visible_panels,
+                    rich_help_panel="BigFix Options",
+                    hidden="BigFix Options" not in visible_panels,
                 ),
             ] = None,
             bigfix_password_env_var: Annotated[
@@ -1026,8 +1039,8 @@ class CLI:
                 typer.Option(
                     "--bigfix-password-env-var",
                     help="Environment variable name containing BigFix password.",
-                    rich_help_panel=PANEL_BIGFIX,
-                    hidden=PANEL_BIGFIX not in visible_panels,
+                    rich_help_panel="BigFix Options",
+                    hidden="BigFix Options" not in visible_panels,
                 ),
             ] = None,
             bigfix_root_url: Annotated[
@@ -1035,20 +1048,20 @@ class CLI:
                 typer.Option(
                     "--bigfix-root-url",
                     help="BigFix API URL.",
-                    rich_help_panel=PANEL_BIGFIX,
-                    hidden=PANEL_BIGFIX not in visible_panels,
+                    rich_help_panel="BigFix Options",
+                    hidden="BigFix Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # Duo Options
+            # Duo Options (from cartography.intel.duo.cli)
             # =================================================================
             duo_api_key_env_var: Annotated[
                 str | None,
                 typer.Option(
                     "--duo-api-key-env-var",
                     help="Environment variable name containing Duo API key.",
-                    rich_help_panel=PANEL_DUO,
-                    hidden=PANEL_DUO not in visible_panels,
+                    rich_help_panel="Duo Options",
+                    hidden="Duo Options" not in visible_panels,
                 ),
             ] = None,
             duo_api_secret_env_var: Annotated[
@@ -1056,8 +1069,8 @@ class CLI:
                 typer.Option(
                     "--duo-api-secret-env-var",
                     help="Environment variable name containing Duo API secret.",
-                    rich_help_panel=PANEL_DUO,
-                    hidden=PANEL_DUO not in visible_panels,
+                    rich_help_panel="Duo Options",
+                    hidden="Duo Options" not in visible_panels,
                 ),
             ] = None,
             duo_api_hostname: Annotated[
@@ -1065,20 +1078,20 @@ class CLI:
                 typer.Option(
                     "--duo-api-hostname",
                     help="Duo API hostname.",
-                    rich_help_panel=PANEL_DUO,
-                    hidden=PANEL_DUO not in visible_panels,
+                    rich_help_panel="Duo Options",
+                    hidden="Duo Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # Workday Options
+            # Workday Options (from cartography.intel.workday.cli)
             # =================================================================
             workday_api_url: Annotated[
                 str | None,
                 typer.Option(
                     "--workday-api-url",
                     help="Workday API URL.",
-                    rich_help_panel=PANEL_WORKDAY,
-                    hidden=PANEL_WORKDAY not in visible_panels,
+                    rich_help_panel="Workday Options",
+                    hidden="Workday Options" not in visible_panels,
                 ),
             ] = None,
             workday_api_login: Annotated[
@@ -1086,8 +1099,8 @@ class CLI:
                 typer.Option(
                     "--workday-api-login",
                     help="Workday API login username.",
-                    rich_help_panel=PANEL_WORKDAY,
-                    hidden=PANEL_WORKDAY not in visible_panels,
+                    rich_help_panel="Workday Options",
+                    hidden="Workday Options" not in visible_panels,
                 ),
             ] = None,
             workday_api_password_env_var: Annotated[
@@ -1095,20 +1108,20 @@ class CLI:
                 typer.Option(
                     "--workday-api-password-env-var",
                     help="Environment variable name containing Workday API password.",
-                    rich_help_panel=PANEL_WORKDAY,
-                    hidden=PANEL_WORKDAY not in visible_panels,
+                    rich_help_panel="Workday Options",
+                    hidden="Workday Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # Semgrep Options
+            # Semgrep Options (from cartography.intel.semgrep.cli)
             # =================================================================
             semgrep_app_token_env_var: Annotated[
                 str | None,
                 typer.Option(
                     "--semgrep-app-token-env-var",
                     help="Environment variable name containing Semgrep app token.",
-                    rich_help_panel=PANEL_SEMGREP,
-                    hidden=PANEL_SEMGREP not in visible_panels,
+                    rich_help_panel="Semgrep Options",
+                    hidden="Semgrep Options" not in visible_panels,
                 ),
             ] = None,
             semgrep_dependency_ecosystems: Annotated[
@@ -1116,20 +1129,20 @@ class CLI:
                 typer.Option(
                     "--semgrep-dependency-ecosystems",
                     help='Comma-separated list of ecosystems for Semgrep dependencies. Example: "gomod,npm".',
-                    rich_help_panel=PANEL_SEMGREP,
-                    hidden=PANEL_SEMGREP not in visible_panels,
+                    rich_help_panel="Semgrep Options",
+                    hidden="Semgrep Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # SnipeIT Options
+            # SnipeIT Options (from cartography.intel.snipeit.cli)
             # =================================================================
             snipeit_base_uri: Annotated[
                 str | None,
                 typer.Option(
                     "--snipeit-base-uri",
                     help="SnipeIT base URI.",
-                    rich_help_panel=PANEL_SNIPEIT,
-                    hidden=PANEL_SNIPEIT not in visible_panels,
+                    rich_help_panel="SnipeIT Options",
+                    hidden="SnipeIT Options" not in visible_panels,
                 ),
             ] = None,
             snipeit_token_env_var: Annotated[
@@ -1137,8 +1150,8 @@ class CLI:
                 typer.Option(
                     "--snipeit-token-env-var",
                     help="Environment variable name containing SnipeIT API token.",
-                    rich_help_panel=PANEL_SNIPEIT,
-                    hidden=PANEL_SNIPEIT not in visible_panels,
+                    rich_help_panel="SnipeIT Options",
+                    hidden="SnipeIT Options" not in visible_panels,
                 ),
             ] = None,
             snipeit_tenant_id: Annotated[
@@ -1146,32 +1159,32 @@ class CLI:
                 typer.Option(
                     "--snipeit-tenant-id",
                     help="SnipeIT tenant ID.",
-                    rich_help_panel=PANEL_SNIPEIT,
-                    hidden=PANEL_SNIPEIT not in visible_panels,
+                    rich_help_panel="SnipeIT Options",
+                    hidden="SnipeIT Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # Cloudflare Options
+            # Cloudflare Options (from cartography.intel.cloudflare.cli)
             # =================================================================
             cloudflare_token_env_var: Annotated[
                 str | None,
                 typer.Option(
                     "--cloudflare-token-env-var",
                     help="Environment variable name containing Cloudflare API key.",
-                    rich_help_panel=PANEL_CLOUDFLARE,
-                    hidden=PANEL_CLOUDFLARE not in visible_panels,
+                    rich_help_panel="Cloudflare Options",
+                    hidden="Cloudflare Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # Tailscale Options
+            # Tailscale Options (from cartography.intel.tailscale.cli)
             # =================================================================
             tailscale_token_env_var: Annotated[
                 str | None,
                 typer.Option(
                     "--tailscale-token-env-var",
                     help="Environment variable name containing Tailscale API token.",
-                    rich_help_panel=PANEL_TAILSCALE,
-                    hidden=PANEL_TAILSCALE not in visible_panels,
+                    rich_help_panel="Tailscale Options",
+                    hidden="Tailscale Options" not in visible_panels,
                 ),
             ] = None,
             tailscale_org: Annotated[
@@ -1179,8 +1192,8 @@ class CLI:
                 typer.Option(
                     "--tailscale-org",
                     help="Tailscale organization name to sync.",
-                    rich_help_panel=PANEL_TAILSCALE,
-                    hidden=PANEL_TAILSCALE not in visible_panels,
+                    rich_help_panel="Tailscale Options",
+                    hidden="Tailscale Options" not in visible_panels,
                 ),
             ] = None,
             tailscale_base_url: Annotated[
@@ -1188,20 +1201,20 @@ class CLI:
                 typer.Option(
                     "--tailscale-base-url",
                     help="Tailscale API base URL.",
-                    rich_help_panel=PANEL_TAILSCALE,
-                    hidden=PANEL_TAILSCALE not in visible_panels,
+                    rich_help_panel="Tailscale Options",
+                    hidden="Tailscale Options" not in visible_panels,
                 ),
             ] = "https://api.tailscale.com/api/v2",
             # =================================================================
-            # OpenAI Options
+            # OpenAI Options (from cartography.intel.openai.cli)
             # =================================================================
             openai_apikey_env_var: Annotated[
                 str | None,
                 typer.Option(
                     "--openai-apikey-env-var",
                     help="Environment variable name containing OpenAI API key.",
-                    rich_help_panel=PANEL_OPENAI,
-                    hidden=PANEL_OPENAI not in visible_panels,
+                    rich_help_panel="OpenAI Options",
+                    hidden="OpenAI Options" not in visible_panels,
                 ),
             ] = None,
             openai_org_id: Annotated[
@@ -1209,32 +1222,32 @@ class CLI:
                 typer.Option(
                     "--openai-org-id",
                     help="OpenAI organization ID to sync.",
-                    rich_help_panel=PANEL_OPENAI,
-                    hidden=PANEL_OPENAI not in visible_panels,
+                    rich_help_panel="OpenAI Options",
+                    hidden="OpenAI Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # Anthropic Options
+            # Anthropic Options (from cartography.intel.anthropic.cli)
             # =================================================================
             anthropic_apikey_env_var: Annotated[
                 str | None,
                 typer.Option(
                     "--anthropic-apikey-env-var",
                     help="Environment variable name containing Anthropic API key.",
-                    rich_help_panel=PANEL_ANTHROPIC,
-                    hidden=PANEL_ANTHROPIC not in visible_panels,
+                    rich_help_panel="Anthropic Options",
+                    hidden="Anthropic Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # Sentry Options
+            # Sentry Options (from cartography.intel.sentry.cli)
             # =================================================================
             sentry_token_env_var: Annotated[
                 str | None,
                 typer.Option(
                     "--sentry-token-env-var",
                     help="Environment variable name containing Sentry internal integration token.",
-                    rich_help_panel=PANEL_SENTRY,
-                    hidden=PANEL_SENTRY not in visible_panels,
+                    rich_help_panel="Sentry Options",
+                    hidden="Sentry Options" not in visible_panels,
                 ),
             ] = None,
             sentry_org: Annotated[
@@ -1242,8 +1255,8 @@ class CLI:
                 typer.Option(
                     "--sentry-org",
                     help="Sentry organization slug. Required when using an internal integration token.",
-                    rich_help_panel=PANEL_SENTRY,
-                    hidden=PANEL_SENTRY not in visible_panels,
+                    rich_help_panel="Sentry Options",
+                    hidden="Sentry Options" not in visible_panels,
                 ),
             ] = None,
             sentry_host: Annotated[
@@ -1251,20 +1264,20 @@ class CLI:
                 typer.Option(
                     "--sentry-host",
                     help="Sentry host URL (default: https://sentry.io). Use for self-hosted instances.",
-                    rich_help_panel=PANEL_SENTRY,
-                    hidden=PANEL_SENTRY not in visible_panels,
+                    rich_help_panel="Sentry Options",
+                    hidden="Sentry Options" not in visible_panels,
                 ),
             ] = "https://sentry.io",
             # =================================================================
-            # SubImage Options
+            # SubImage Options (from cartography.intel.subimage.cli)
             # =================================================================
             subimage_client_id_env_var: Annotated[
                 str | None,
                 typer.Option(
                     "--subimage-client-id-env-var",
                     help="Environment variable name containing SubImage client ID.",
-                    rich_help_panel=PANEL_SUBIMAGE,
-                    hidden=PANEL_SUBIMAGE not in visible_panels,
+                    rich_help_panel="SubImage Options",
+                    hidden="SubImage Options" not in visible_panels,
                 ),
             ] = None,
             subimage_client_secret_env_var: Annotated[
@@ -1272,8 +1285,8 @@ class CLI:
                 typer.Option(
                     "--subimage-client-secret-env-var",
                     help="Environment variable name containing SubImage client secret.",
-                    rich_help_panel=PANEL_SUBIMAGE,
-                    hidden=PANEL_SUBIMAGE not in visible_panels,
+                    rich_help_panel="SubImage Options",
+                    hidden="SubImage Options" not in visible_panels,
                 ),
             ] = None,
             subimage_tenant_url: Annotated[
@@ -1281,8 +1294,8 @@ class CLI:
                 typer.Option(
                     "--subimage-tenant-url",
                     help="SubImage tenant URL, e.g. https://tenant.subimage.io.",
-                    rich_help_panel=PANEL_SUBIMAGE,
-                    hidden=PANEL_SUBIMAGE not in visible_panels,
+                    rich_help_panel="SubImage Options",
+                    hidden="SubImage Options" not in visible_panels,
                 ),
             ] = None,
             subimage_authkit_url: Annotated[
@@ -1290,20 +1303,20 @@ class CLI:
                 typer.Option(
                     "--subimage-authkit-url",
                     help="SubImage AuthKit URL for OAuth2 token exchange.",
-                    rich_help_panel=PANEL_SUBIMAGE,
-                    hidden=PANEL_SUBIMAGE not in visible_panels,
+                    rich_help_panel="SubImage Options",
+                    hidden="SubImage Options" not in visible_panels,
                 ),
             ] = "https://auth.subimage.io",
             # =================================================================
-            # Airbyte Options
+            # Airbyte Options (from cartography.intel.airbyte.cli)
             # =================================================================
             airbyte_client_id: Annotated[
                 str | None,
                 typer.Option(
                     "--airbyte-client-id",
                     help="Airbyte client ID for authentication.",
-                    rich_help_panel=PANEL_AIRBYTE,
-                    hidden=PANEL_AIRBYTE not in visible_panels,
+                    rich_help_panel="Airbyte Options",
+                    hidden="Airbyte Options" not in visible_panels,
                 ),
             ] = None,
             airbyte_client_secret_env_var: Annotated[
@@ -1311,8 +1324,8 @@ class CLI:
                 typer.Option(
                     "--airbyte-client-secret-env-var",
                     help="Environment variable name containing Airbyte client secret.",
-                    rich_help_panel=PANEL_AIRBYTE,
-                    hidden=PANEL_AIRBYTE not in visible_panels,
+                    rich_help_panel="Airbyte Options",
+                    hidden="Airbyte Options" not in visible_panels,
                 ),
             ] = None,
             airbyte_api_url: Annotated[
@@ -1320,20 +1333,20 @@ class CLI:
                 typer.Option(
                     "--airbyte-api-url",
                     help="Airbyte API base URL.",
-                    rich_help_panel=PANEL_AIRBYTE,
-                    hidden=PANEL_AIRBYTE not in visible_panels,
+                    rich_help_panel="Airbyte Options",
+                    hidden="Airbyte Options" not in visible_panels,
                 ),
             ] = "https://api.airbyte.com/v1",
             # =================================================================
-            # Docker Scout Options
+            # Docker Scout Options (from cartography.intel.docker_scout.cli)
             # =================================================================
             docker_scout_results_dir: Annotated[
                 str | None,
                 typer.Option(
                     "--docker-scout-results-dir",
                     help="Local directory containing Docker Scout recommendation text reports.",
-                    rich_help_panel=PANEL_DOCKER_SCOUT,
-                    hidden=PANEL_DOCKER_SCOUT not in visible_panels,
+                    rich_help_panel="Docker Scout Options",
+                    hidden="Docker Scout Options" not in visible_panels,
                 ),
             ] = None,
             docker_scout_s3_bucket: Annotated[
@@ -1341,8 +1354,8 @@ class CLI:
                 typer.Option(
                     "--docker-scout-s3-bucket",
                     help="S3 bucket name containing Docker Scout recommendation text reports.",
-                    rich_help_panel=PANEL_DOCKER_SCOUT,
-                    hidden=PANEL_DOCKER_SCOUT not in visible_panels,
+                    rich_help_panel="Docker Scout Options",
+                    hidden="Docker Scout Options" not in visible_panels,
                 ),
             ] = None,
             docker_scout_s3_prefix: Annotated[
@@ -1350,20 +1363,20 @@ class CLI:
                 typer.Option(
                     "--docker-scout-s3-prefix",
                     help="S3 prefix path for Docker Scout recommendation text reports.",
-                    rich_help_panel=PANEL_DOCKER_SCOUT,
-                    hidden=PANEL_DOCKER_SCOUT not in visible_panels,
+                    rich_help_panel="Docker Scout Options",
+                    hidden="Docker Scout Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # Trivy Options
+            # Trivy Options (from cartography.intel.trivy.cli)
             # =================================================================
             trivy_s3_bucket: Annotated[
                 str | None,
                 typer.Option(
                     "--trivy-s3-bucket",
                     help="S3 bucket name containing Trivy scan results.",
-                    rich_help_panel=PANEL_TRIVY,
-                    hidden=PANEL_TRIVY not in visible_panels,
+                    rich_help_panel="Trivy Options",
+                    hidden="Trivy Options" not in visible_panels,
                 ),
             ] = None,
             trivy_s3_prefix: Annotated[
@@ -1371,8 +1384,8 @@ class CLI:
                 typer.Option(
                     "--trivy-s3-prefix",
                     help="S3 prefix path for Trivy scan results.",
-                    rich_help_panel=PANEL_TRIVY,
-                    hidden=PANEL_TRIVY not in visible_panels,
+                    rich_help_panel="Trivy Options",
+                    hidden="Trivy Options" not in visible_panels,
                 ),
             ] = None,
             trivy_results_dir: Annotated[
@@ -1380,20 +1393,20 @@ class CLI:
                 typer.Option(
                     "--trivy-results-dir",
                     help="Local directory containing Trivy JSON results.",
-                    rich_help_panel=PANEL_TRIVY,
-                    hidden=PANEL_TRIVY not in visible_panels,
+                    rich_help_panel="Trivy Options",
+                    hidden="Trivy Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # Syft Options
+            # Syft Options (from cartography.intel.syft.cli)
             # =================================================================
             syft_s3_bucket: Annotated[
                 str | None,
                 typer.Option(
                     "--syft-s3-bucket",
                     help="S3 bucket name containing Syft scan results.",
-                    rich_help_panel=PANEL_SYFT,
-                    hidden=PANEL_SYFT not in visible_panels,
+                    rich_help_panel="Syft Options",
+                    hidden="Syft Options" not in visible_panels,
                 ),
             ] = None,
             syft_s3_prefix: Annotated[
@@ -1401,8 +1414,8 @@ class CLI:
                 typer.Option(
                     "--syft-s3-prefix",
                     help="S3 prefix path for Syft scan results.",
-                    rich_help_panel=PANEL_SYFT,
-                    hidden=PANEL_SYFT not in visible_panels,
+                    rich_help_panel="Syft Options",
+                    hidden="Syft Options" not in visible_panels,
                 ),
             ] = None,
             syft_results_dir: Annotated[
@@ -1410,19 +1423,20 @@ class CLI:
                 typer.Option(
                     "--syft-results-dir",
                     help="Local directory containing Syft JSON results.",
-                    rich_help_panel=PANEL_SYFT,
-                    hidden=PANEL_SYFT not in visible_panels,
+                    rich_help_panel="Syft Options",
+                    hidden="Syft Options" not in visible_panels,
                 ),
             ] = None,
-            # AIBOM Options
+            # =================================================================
+            # AIBOM Options (from cartography.intel.aibom.cli)
             # =================================================================
             aibom_s3_bucket: Annotated[
                 str | None,
                 typer.Option(
                     "--aibom-s3-bucket",
                     help="S3 bucket name containing AIBOM scan results.",
-                    rich_help_panel=PANEL_AIBOM,
-                    hidden=PANEL_AIBOM not in visible_panels,
+                    rich_help_panel="AIBOM Options",
+                    hidden="AIBOM Options" not in visible_panels,
                 ),
             ] = None,
             aibom_s3_prefix: Annotated[
@@ -1430,8 +1444,8 @@ class CLI:
                 typer.Option(
                     "--aibom-s3-prefix",
                     help="S3 prefix path for AIBOM scan results.",
-                    rich_help_panel=PANEL_AIBOM,
-                    hidden=PANEL_AIBOM not in visible_panels,
+                    rich_help_panel="AIBOM Options",
+                    hidden="AIBOM Options" not in visible_panels,
                 ),
             ] = None,
             aibom_results_dir: Annotated[
@@ -1439,20 +1453,20 @@ class CLI:
                 typer.Option(
                     "--aibom-results-dir",
                     help="Local directory containing AIBOM JSON results.",
-                    rich_help_panel=PANEL_AIBOM,
-                    hidden=PANEL_AIBOM not in visible_panels,
+                    rich_help_panel="AIBOM Options",
+                    hidden="AIBOM Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # Ubuntu Security Options
+            # Ubuntu Security Options (from cartography.intel.ubuntu.cli)
             # =================================================================
             ubuntu_security_enabled: Annotated[
                 bool,
                 typer.Option(
                     "--ubuntu-security-enabled",
                     help="Enable Ubuntu Security CVE and Notice ingestion.",
-                    rich_help_panel=PANEL_UBUNTU,
-                    hidden=PANEL_UBUNTU not in visible_panels,
+                    rich_help_panel="Ubuntu Security Options",
+                    hidden="Ubuntu Security Options" not in visible_panels,
                 ),
             ] = False,
             ubuntu_security_api_url: Annotated[
@@ -1460,20 +1474,20 @@ class CLI:
                 typer.Option(
                     "--ubuntu-security-api-url",
                     help="Ubuntu Security API base URL. Defaults to https://ubuntu.com.",
-                    rich_help_panel=PANEL_UBUNTU,
-                    hidden=PANEL_UBUNTU not in visible_panels,
+                    rich_help_panel="Ubuntu Security Options",
+                    hidden="Ubuntu Security Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # Ontology Options
+            # Ontology Options (from cartography.intel.ontology.cli)
             # =================================================================
             ontology_users_source: Annotated[
                 str | None,
                 typer.Option(
                     "--ontology-users-source",
                     help="Comma-separated list of sources of truth for user data in the ontology.",
-                    rich_help_panel=PANEL_ONTOLOGY,
-                    hidden=PANEL_ONTOLOGY not in visible_panels,
+                    rich_help_panel="Ontology Options",
+                    hidden="Ontology Options" not in visible_panels,
                 ),
             ] = None,
             ontology_devices_source: Annotated[
@@ -1481,20 +1495,20 @@ class CLI:
                 typer.Option(
                     "--ontology-devices-source",
                     help="Comma-separated list of sources of truth for device data in the ontology.",
-                    rich_help_panel=PANEL_ONTOLOGY,
-                    hidden=PANEL_ONTOLOGY not in visible_panels,
+                    rich_help_panel="Ontology Options",
+                    hidden="Ontology Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # Scaleway Options
+            # Scaleway Options (from cartography.intel.scaleway.cli)
             # =================================================================
             scaleway_org: Annotated[
                 str | None,
                 typer.Option(
                     "--scaleway-org",
                     help="Scaleway organization ID to sync.",
-                    rich_help_panel=PANEL_SCALEWAY,
-                    hidden=PANEL_SCALEWAY not in visible_panels,
+                    rich_help_panel="Scaleway Options",
+                    hidden="Scaleway Options" not in visible_panels,
                 ),
             ] = None,
             scaleway_access_key: Annotated[
@@ -1502,8 +1516,8 @@ class CLI:
                 typer.Option(
                     "--scaleway-access-key",
                     help="Scaleway access key for authentication.",
-                    rich_help_panel=PANEL_SCALEWAY,
-                    hidden=PANEL_SCALEWAY not in visible_panels,
+                    rich_help_panel="Scaleway Options",
+                    hidden="Scaleway Options" not in visible_panels,
                 ),
             ] = None,
             scaleway_secret_key_env_var: Annotated[
@@ -1511,20 +1525,20 @@ class CLI:
                 typer.Option(
                     "--scaleway-secret-key-env-var",
                     help="Environment variable name containing Scaleway secret key.",
-                    rich_help_panel=PANEL_SCALEWAY,
-                    hidden=PANEL_SCALEWAY not in visible_panels,
+                    rich_help_panel="Scaleway Options",
+                    hidden="Scaleway Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
-            # SentinelOne Options
+            # SentinelOne Options (from cartography.intel.sentinelone.cli)
             # =================================================================
             sentinelone_account_ids: Annotated[
                 str | None,
                 typer.Option(
                     "--sentinelone-account-ids",
                     help="Comma-separated list of SentinelOne account IDs to sync.",
-                    rich_help_panel=PANEL_SENTINELONE,
-                    hidden=PANEL_SENTINELONE not in visible_panels,
+                    rich_help_panel="SentinelOne Options",
+                    hidden="SentinelOne Options" not in visible_panels,
                 ),
             ] = None,
             sentinelone_site_ids: Annotated[
@@ -1532,8 +1546,8 @@ class CLI:
                 typer.Option(
                     "--sentinelone-site-ids",
                     help="Comma-separated list of SentinelOne site IDs to sync.",
-                    rich_help_panel=PANEL_SENTINELONE,
-                    hidden=PANEL_SENTINELONE not in visible_panels,
+                    rich_help_panel="SentinelOne Options",
+                    hidden="SentinelOne Options" not in visible_panels,
                 ),
             ] = None,
             sentinelone_api_url: Annotated[
@@ -1541,8 +1555,8 @@ class CLI:
                 typer.Option(
                     "--sentinelone-api-url",
                     help="SentinelOne API URL.",
-                    rich_help_panel=PANEL_SENTINELONE,
-                    hidden=PANEL_SENTINELONE not in visible_panels,
+                    rich_help_panel="SentinelOne Options",
+                    hidden="SentinelOne Options" not in visible_panels,
                 ),
             ] = None,
             sentinelone_api_token_env_var: Annotated[
@@ -1550,20 +1564,20 @@ class CLI:
                 typer.Option(
                     "--sentinelone-api-token-env-var",
                     help="Environment variable name containing SentinelOne API token.",
-                    rich_help_panel=PANEL_SENTINELONE,
-                    hidden=PANEL_SENTINELONE not in visible_panels,
+                    rich_help_panel="SentinelOne Options",
+                    hidden="SentinelOne Options" not in visible_panels,
                 ),
             ] = "SENTINELONE_API_TOKEN",
             # =================================================================
-            # Keycloak Options
+            # Keycloak Options (from cartography.intel.keycloak.cli)
             # =================================================================
             keycloak_client_id: Annotated[
                 str | None,
                 typer.Option(
                     "--keycloak-client-id",
                     help="Keycloak client ID to sync.",
-                    rich_help_panel=PANEL_KEYCLOAK,
-                    hidden=PANEL_KEYCLOAK not in visible_panels,
+                    rich_help_panel="Keycloak Options",
+                    hidden="Keycloak Options" not in visible_panels,
                 ),
             ] = None,
             keycloak_client_secret_env_var: Annotated[
@@ -1571,8 +1585,8 @@ class CLI:
                 typer.Option(
                     "--keycloak-client-secret-env-var",
                     help="Environment variable name containing Keycloak client secret.",
-                    rich_help_panel=PANEL_KEYCLOAK,
-                    hidden=PANEL_KEYCLOAK not in visible_panels,
+                    rich_help_panel="Keycloak Options",
+                    hidden="Keycloak Options" not in visible_panels,
                 ),
             ] = "KEYCLOAK_CLIENT_SECRET",
             keycloak_url: Annotated[
@@ -1580,8 +1594,8 @@ class CLI:
                 typer.Option(
                     "--keycloak-url",
                     help="Keycloak base URL.",
-                    rich_help_panel=PANEL_KEYCLOAK,
-                    hidden=PANEL_KEYCLOAK not in visible_panels,
+                    rich_help_panel="Keycloak Options",
+                    hidden="Keycloak Options" not in visible_panels,
                 ),
             ] = None,
             keycloak_realm: Annotated[
@@ -1589,20 +1603,20 @@ class CLI:
                 typer.Option(
                     "--keycloak-realm",
                     help="Keycloak realm for authentication (all realms will be synced).",
-                    rich_help_panel=PANEL_KEYCLOAK,
-                    hidden=PANEL_KEYCLOAK not in visible_panels,
+                    rich_help_panel="Keycloak Options",
+                    hidden="Keycloak Options" not in visible_panels,
                 ),
             ] = "master",
             # =================================================================
-            # Slack Options
+            # Slack Options (from cartography.intel.slack.cli)
             # =================================================================
             slack_token_env_var: Annotated[
                 str | None,
                 typer.Option(
                     "--slack-token-env-var",
                     help="Environment variable name containing Slack token.",
-                    rich_help_panel=PANEL_SLACK,
-                    hidden=PANEL_SLACK not in visible_panels,
+                    rich_help_panel="Slack Options",
+                    hidden="Slack Options" not in visible_panels,
                 ),
             ] = None,
             slack_teams: Annotated[
@@ -1610,8 +1624,8 @@ class CLI:
                 typer.Option(
                     "--slack-teams",
                     help="Comma-separated list of Slack Team IDs to sync.",
-                    rich_help_panel=PANEL_SLACK,
-                    hidden=PANEL_SLACK not in visible_panels,
+                    rich_help_panel="Slack Options",
+                    hidden="Slack Options" not in visible_panels,
                 ),
             ] = None,
             slack_channels_memberships: Annotated[
@@ -1619,20 +1633,20 @@ class CLI:
                 typer.Option(
                     "--slack-channels-memberships",
                     help="Pull memberships for Slack channels (can be time consuming).",
-                    rich_help_panel=PANEL_SLACK,
-                    hidden=PANEL_SLACK not in visible_panels,
+                    rich_help_panel="Slack Options",
+                    hidden="Slack Options" not in visible_panels,
                 ),
             ] = False,
             # =================================================================
-            # Spacelift Options
+            # Spacelift Options (from cartography.intel.spacelift.cli)
             # =================================================================
             spacelift_api_endpoint: Annotated[
                 str | None,
                 typer.Option(
                     "--spacelift-api-endpoint",
                     help="Spacelift GraphQL API endpoint.",
-                    rich_help_panel=PANEL_SPACELIFT,
-                    hidden=PANEL_SPACELIFT not in visible_panels,
+                    rich_help_panel="Spacelift Options",
+                    hidden="Spacelift Options" not in visible_panels,
                 ),
             ] = None,
             spacelift_api_token_env_var: Annotated[
@@ -1640,8 +1654,8 @@ class CLI:
                 typer.Option(
                     "--spacelift-api-token-env-var",
                     help="Environment variable name containing Spacelift API token.",
-                    rich_help_panel=PANEL_SPACELIFT,
-                    hidden=PANEL_SPACELIFT not in visible_panels,
+                    rich_help_panel="Spacelift Options",
+                    hidden="Spacelift Options" not in visible_panels,
                 ),
             ] = "SPACELIFT_API_TOKEN",
             spacelift_api_key_id_env_var: Annotated[
@@ -1649,8 +1663,8 @@ class CLI:
                 typer.Option(
                     "--spacelift-api-key-id-env-var",
                     help="Environment variable name containing Spacelift API key ID.",
-                    rich_help_panel=PANEL_SPACELIFT,
-                    hidden=PANEL_SPACELIFT not in visible_panels,
+                    rich_help_panel="Spacelift Options",
+                    hidden="Spacelift Options" not in visible_panels,
                 ),
             ] = "SPACELIFT_API_KEY_ID",
             spacelift_api_key_secret_env_var: Annotated[
@@ -1658,8 +1672,8 @@ class CLI:
                 typer.Option(
                     "--spacelift-api-key-secret-env-var",
                     help="Environment variable name containing Spacelift API key secret.",
-                    rich_help_panel=PANEL_SPACELIFT,
-                    hidden=PANEL_SPACELIFT not in visible_panels,
+                    rich_help_panel="Spacelift Options",
+                    hidden="Spacelift Options" not in visible_panels,
                 ),
             ] = "SPACELIFT_API_KEY_SECRET",
             spacelift_ec2_ownership_aws_profile: Annotated[
@@ -1667,8 +1681,8 @@ class CLI:
                 typer.Option(
                     "--spacelift-ec2-ownership-aws-profile",
                     help="AWS profile for fetching EC2 ownership data from S3.",
-                    rich_help_panel=PANEL_SPACELIFT,
-                    hidden=PANEL_SPACELIFT not in visible_panels,
+                    rich_help_panel="Spacelift Options",
+                    hidden="Spacelift Options" not in visible_panels,
                 ),
             ] = None,
             spacelift_ec2_ownership_s3_bucket: Annotated[
@@ -1676,8 +1690,8 @@ class CLI:
                 typer.Option(
                     "--spacelift-ec2-ownership-s3-bucket",
                     help="S3 bucket for EC2 ownership CloudTrail data.",
-                    rich_help_panel=PANEL_SPACELIFT,
-                    hidden=PANEL_SPACELIFT not in visible_panels,
+                    rich_help_panel="Spacelift Options",
+                    hidden="Spacelift Options" not in visible_panels,
                 ),
             ] = None,
             spacelift_ec2_ownership_s3_prefix: Annotated[
@@ -1685,8 +1699,8 @@ class CLI:
                 typer.Option(
                     "--spacelift-ec2-ownership-s3-prefix",
                     help="S3 prefix for EC2 ownership CloudTrail data.",
-                    rich_help_panel=PANEL_SPACELIFT,
-                    hidden=PANEL_SPACELIFT not in visible_panels,
+                    rich_help_panel="Spacelift Options",
+                    hidden="Spacelift Options" not in visible_panels,
                 ),
             ] = None,
             # =================================================================
@@ -1783,106 +1797,6 @@ class CLI:
             elif sync is None:
                 sync = cartography.sync.build_default_sync()
 
-            # Validate AWS options
-            if aws_requested_syncs:
-                from cartography.intel.aws.util.common import (
-                    parse_and_validate_aws_requested_syncs,
-                )
-
-                parse_and_validate_aws_requested_syncs(aws_requested_syncs)
-            if aws_regions:
-                from cartography.intel.aws.util.common import (
-                    parse_and_validate_aws_regions,
-                )
-
-                parse_and_validate_aws_regions(aws_regions)
-
-            # Validate GCP options
-            if gcp_requested_syncs:
-                from cartography.intel.gcp.util import (
-                    parse_and_validate_gcp_requested_syncs,
-                )
-
-                parse_and_validate_gcp_requested_syncs(gcp_requested_syncs)
-
-            # Read Azure client secret
-            azure_client_secret = None
-            if azure_sp_auth and azure_client_secret_env_var:
-                logger.debug(
-                    "Reading Client Secret for Azure from environment variable %s",
-                    azure_client_secret_env_var,
-                )
-                azure_client_secret = os.environ.get(azure_client_secret_env_var)
-
-            # Read Entra client secret
-            entra_client_secret = None
-            if entra_tenant_id and entra_client_id and entra_client_secret_env_var:
-                logger.debug(
-                    "Reading Client Secret for Entra from environment variable %s",
-                    entra_client_secret_env_var,
-                )
-                entra_client_secret = os.environ.get(entra_client_secret_env_var)
-
-            # Read Okta API key
-            okta_api_key = None
-            if okta_org_id and okta_api_key_env_var:
-                logger.debug(
-                    "Reading API key for Okta from environment variable %s",
-                    okta_api_key_env_var,
-                )
-                okta_api_key = os.environ.get(okta_api_key_env_var)
-
-            # Read GitHub config
-            github_config = None
-            if github_config_env_var:
-                logger.debug(
-                    "Reading config for GitHub from environment variable %s",
-                    github_config_env_var,
-                )
-                github_config = os.environ.get(github_config_env_var)
-
-            # Read DigitalOcean token
-            digitalocean_token = None
-            if digitalocean_token_env_var:
-                logger.debug(
-                    "Reading token for DigitalOcean from environment variable %s",
-                    digitalocean_token_env_var,
-                )
-                digitalocean_token = os.environ.get(digitalocean_token_env_var)
-
-            # Read Jamf password
-            jamf_password = None
-            if jamf_base_uri:
-                if jamf_user and jamf_password_env_var:
-                    logger.debug(
-                        "Reading password for Jamf from environment variable %s",
-                        jamf_password_env_var,
-                    )
-                    jamf_password = os.environ.get(jamf_password_env_var)
-                if not jamf_user:
-                    logger.warning("A Jamf base URI was provided but a user was not.")
-                if jamf_user and not jamf_password:
-                    logger.warning("A Jamf password could not be found.")
-
-            # Read Kandji token
-            kandji_token = None
-            if kandji_base_uri:
-                if kandji_token_env_var:
-                    logger.debug(
-                        "Reading Kandji API token from environment variable %s",
-                        kandji_token_env_var,
-                    )
-                    kandji_token = os.environ.get(kandji_token_env_var)
-                elif os.environ.get("KANDJI_TOKEN"):
-                    logger.debug(
-                        "Reading Kandji API token from environment variable KANDJI_TOKEN",
-                    )
-                    kandji_token = os.environ.get("KANDJI_TOKEN")
-                else:
-                    logger.warning(
-                        "A Kandji base URI was provided but a token was not."
-                    )
-
             if statsd_enabled:
                 logger.debug(
                     "statsd enabled. Sending metrics to server %s:%d. Metrics have prefix '%s'.",
@@ -1891,356 +1805,16 @@ class CLI:
                     statsd_prefix,
                 )
 
-            # Read PagerDuty API key
-            pagerduty_api_key = None
-            if pagerduty_api_key_env_var:
-                logger.debug(
-                    "Reading API key for PagerDuty from environment variable %s",
-                    pagerduty_api_key_env_var,
-                )
-                pagerduty_api_key = os.environ.get(pagerduty_api_key_env_var)
+            # Collect all local variables as a dict for provider processing
+            all_args = locals()
 
-            # Read CrowdStrike credentials
-            crowdstrike_client_id = None
-            if crowdstrike_client_id_env_var:
-                logger.debug(
-                    "Reading client ID for CrowdStrike from environment variable %s",
-                    crowdstrike_client_id_env_var,
-                )
-                crowdstrike_client_id = os.environ.get(crowdstrike_client_id_env_var)
+            # Delegate to each provider's process_cli_args to build Config kwargs
+            config_kwargs: dict[str, Any] = {}
+            for provider_mod in _provider_modules:
+                provider_kwargs = provider_mod.process_cli_args(all_args)
+                config_kwargs.update(provider_kwargs)
 
-            crowdstrike_client_secret = None
-            if crowdstrike_client_secret_env_var:
-                logger.debug(
-                    "Reading client secret for CrowdStrike from environment variable %s",
-                    crowdstrike_client_secret_env_var,
-                )
-                crowdstrike_client_secret = os.environ.get(
-                    crowdstrike_client_secret_env_var
-                )
-
-            # Read GSuite config
-            gsuite_config = None
-            if gsuite_tokens_env_var:
-                logger.debug(
-                    "Reading config for GSuite from environment variable %s",
-                    gsuite_tokens_env_var,
-                )
-                gsuite_config = os.environ.get(gsuite_tokens_env_var)
-
-            # Read Google Workspace config
-            googleworkspace_config = None
-            if googleworkspace_tokens_env_var:
-                logger.debug(
-                    "Reading config for Google Workspace from environment variable %s",
-                    googleworkspace_tokens_env_var,
-                )
-                googleworkspace_config = os.environ.get(googleworkspace_tokens_env_var)
-
-            # Read JumpCloud API key
-            jumpcloud_api_key = None
-            if jumpcloud_api_key_env_var:
-                logger.debug(
-                    "Reading API key for JumpCloud from environment variable %s",
-                    jumpcloud_api_key_env_var,
-                )
-                jumpcloud_api_key = os.environ.get(jumpcloud_api_key_env_var)
-            # Read LastPass credentials
-            lastpass_cid = None
-            if lastpass_cid_env_var:
-                logger.debug(
-                    "Reading CID for LastPass from environment variable %s",
-                    lastpass_cid_env_var,
-                )
-                lastpass_cid = os.environ.get(lastpass_cid_env_var)
-
-            lastpass_provhash = None
-            if lastpass_provhash_env_var:
-                logger.debug(
-                    "Reading provhash for LastPass from environment variable %s",
-                    lastpass_provhash_env_var,
-                )
-                lastpass_provhash = os.environ.get(lastpass_provhash_env_var)
-
-            # Read BigFix password
-            bigfix_password = None
-            if bigfix_username and bigfix_password_env_var and bigfix_root_url:
-                logger.debug(
-                    "Reading BigFix password from environment variable %s",
-                    bigfix_password_env_var,
-                )
-                bigfix_password = os.environ.get(bigfix_password_env_var)
-
-            # Read Duo credentials
-            duo_api_key = None
-            duo_api_secret = None
-            if duo_api_key_env_var and duo_api_secret_env_var and duo_api_hostname:
-                logger.debug(
-                    "Reading Duo credentials from environment variables %s, %s",
-                    duo_api_key_env_var,
-                    duo_api_secret_env_var,
-                )
-                duo_api_key = os.environ.get(duo_api_key_env_var)
-                duo_api_secret = os.environ.get(duo_api_secret_env_var)
-
-            # Read GitLab token
-            gitlab_token = None
-            if gitlab_url and gitlab_token_env_var:
-                logger.debug(
-                    "Reading GitLab token from environment variable %s",
-                    gitlab_token_env_var,
-                )
-                gitlab_token = os.environ.get(gitlab_token_env_var)
-
-            # Read Workday password
-            workday_api_password = None
-            if workday_api_url and workday_api_login and workday_api_password_env_var:
-                logger.debug(
-                    "Reading Workday API password from environment variable %s",
-                    workday_api_password_env_var,
-                )
-                workday_api_password = os.environ.get(workday_api_password_env_var)
-
-            # Read Semgrep token
-            semgrep_app_token = None
-            if semgrep_app_token_env_var:
-                logger.debug(
-                    "Reading Semgrep app token from environment variable %s",
-                    semgrep_app_token_env_var,
-                )
-                semgrep_app_token = os.environ.get(semgrep_app_token_env_var)
-
-            if semgrep_dependency_ecosystems:
-                from cartography.intel.semgrep.dependencies import (
-                    parse_and_validate_semgrep_ecosystems,
-                )
-
-                parse_and_validate_semgrep_ecosystems(semgrep_dependency_ecosystems)
-
-            # Read CVE API key
-            cve_api_key = None
-            if cve_api_key_env_var:
-                logger.debug(
-                    "Reading CVE API key from environment variable %s",
-                    cve_api_key_env_var,
-                )
-                cve_api_key = os.environ.get(cve_api_key_env_var)
-
-            # Read SnipeIT token
-            snipeit_token = None
-            if snipeit_base_uri:
-                if snipeit_token_env_var:
-                    logger.debug(
-                        "Reading SnipeIT API token from environment variable %s",
-                        snipeit_token_env_var,
-                    )
-                    snipeit_token = os.environ.get(snipeit_token_env_var)
-                elif os.environ.get("SNIPEIT_TOKEN"):
-                    logger.debug(
-                        "Reading SnipeIT API token from environment variable SNIPEIT_TOKEN",
-                    )
-                    snipeit_token = os.environ.get("SNIPEIT_TOKEN")
-                else:
-                    logger.warning(
-                        "A SnipeIT base URI was provided but a token was not."
-                    )
-
-            # Read Tailscale token
-            tailscale_token = None
-            if tailscale_token_env_var:
-                logger.debug(
-                    "Reading Tailscale API token from environment variable %s",
-                    tailscale_token_env_var,
-                )
-                tailscale_token = os.environ.get(tailscale_token_env_var)
-
-            # Read Cloudflare token
-            cloudflare_token = None
-            if cloudflare_token_env_var:
-                logger.debug(
-                    "Reading Cloudflare API key from environment variable %s",
-                    cloudflare_token_env_var,
-                )
-                cloudflare_token = os.environ.get(cloudflare_token_env_var)
-
-            # Read OpenAI API key
-            openai_apikey = None
-            if openai_apikey_env_var:
-                logger.debug(
-                    "Reading OpenAI API key from environment variable %s",
-                    openai_apikey_env_var,
-                )
-                openai_apikey = os.environ.get(openai_apikey_env_var)
-
-            # Read Anthropic API key
-            anthropic_apikey = None
-            if anthropic_apikey_env_var:
-                logger.debug(
-                    "Reading Anthropic API key from environment variable %s",
-                    anthropic_apikey_env_var,
-                )
-                anthropic_apikey = os.environ.get(anthropic_apikey_env_var)
-
-            # Read Sentry token
-            sentry_token = None
-            if sentry_token_env_var:
-                logger.debug(
-                    "Reading Sentry token from environment variable %s",
-                    sentry_token_env_var,
-                )
-                sentry_token = os.environ.get(sentry_token_env_var)
-
-            # Read SubImage credentials
-            subimage_client_id = None
-            if subimage_client_id_env_var:
-                logger.debug(
-                    "Reading SubImage client ID from environment variable %s",
-                    subimage_client_id_env_var,
-                )
-                subimage_client_id = os.environ.get(subimage_client_id_env_var)
-
-            subimage_client_secret = None
-            if subimage_client_secret_env_var:
-                logger.debug(
-                    "Reading SubImage client secret from environment variable %s",
-                    subimage_client_secret_env_var,
-                )
-                subimage_client_secret = os.environ.get(subimage_client_secret_env_var)
-
-            # Read Airbyte client secret
-            airbyte_client_secret = None
-            if airbyte_client_id and airbyte_client_secret_env_var:
-                logger.debug(
-                    "Reading Airbyte client secret from environment variable %s",
-                    airbyte_client_secret_env_var,
-                )
-                airbyte_client_secret = os.environ.get(airbyte_client_secret_env_var)
-
-            # Log Docker Scout config
-            if docker_scout_results_dir:
-                logger.debug("Docker Scout results dir: %s", docker_scout_results_dir)
-            if docker_scout_s3_bucket:
-                logger.debug("Docker Scout S3 bucket: %s", docker_scout_s3_bucket)
-            if docker_scout_s3_prefix:
-                logger.debug("Docker Scout S3 prefix: %s", docker_scout_s3_prefix)
-
-            # Log Trivy config
-            if trivy_s3_bucket:
-                logger.debug("Trivy S3 bucket: %s", trivy_s3_bucket)
-            if trivy_s3_prefix:
-                logger.debug("Trivy S3 prefix: %s", trivy_s3_prefix)
-            if trivy_results_dir:
-                logger.debug("Trivy results dir: %s", trivy_results_dir)
-
-            # Log Syft config
-            if syft_s3_bucket:
-                logger.debug("Syft S3 bucket: %s", syft_s3_bucket)
-            if syft_s3_prefix:
-                logger.debug("Syft S3 prefix: %s", syft_s3_prefix)
-            if syft_results_dir:
-                logger.debug("Syft results dir: %s", syft_results_dir)
-
-            # Log AIBOM config
-            if aibom_s3_bucket:
-                logger.debug("AIBOM S3 bucket: %s", aibom_s3_bucket)
-            if aibom_s3_prefix:
-                logger.debug("AIBOM S3 prefix: %s", aibom_s3_prefix)
-            if aibom_results_dir:
-                logger.debug("AIBOM results dir: %s", aibom_results_dir)
-
-            # Read Scaleway secret key
-            scaleway_secret_key = None
-            if scaleway_secret_key_env_var:
-                logger.debug(
-                    "Reading Scaleway secret key from environment variable %s",
-                    scaleway_secret_key_env_var,
-                )
-                scaleway_secret_key = os.environ.get(scaleway_secret_key_env_var)
-
-            # Parse SentinelOne account IDs
-            sentinelone_account_ids_list = None
-            if sentinelone_account_ids:
-                sentinelone_account_ids_list = [
-                    id.strip() for id in sentinelone_account_ids.split(",")
-                ]
-                logger.debug(
-                    "Parsed %d SentinelOne account IDs to sync",
-                    len(sentinelone_account_ids_list),
-                )
-
-            sentinelone_site_ids_list = None
-            if sentinelone_site_ids:
-                sentinelone_site_ids_list = [
-                    id.strip() for id in sentinelone_site_ids.split(",")
-                ]
-                logger.debug(
-                    "Parsed %d SentinelOne site IDs to sync",
-                    len(sentinelone_site_ids_list),
-                )
-
-            # Read SentinelOne API token
-            sentinelone_api_token = None
-            if sentinelone_api_url and sentinelone_api_token_env_var:
-                logger.debug(
-                    "Reading SentinelOne API token from environment variable %s",
-                    sentinelone_api_token_env_var,
-                )
-                sentinelone_api_token = os.environ.get(sentinelone_api_token_env_var)
-
-            # Read Keycloak client secret
-            keycloak_client_secret = None
-            if keycloak_client_secret_env_var:
-                logger.debug(
-                    "Reading Keycloak client secret from environment variable %s",
-                    keycloak_client_secret_env_var,
-                )
-                keycloak_client_secret = os.environ.get(keycloak_client_secret_env_var)
-
-            # Read Slack token
-            slack_token = None
-            if slack_token_env_var:
-                logger.debug(
-                    "Reading Slack token from environment variable %s",
-                    slack_token_env_var,
-                )
-                slack_token = os.environ.get(slack_token_env_var)
-
-            # Read Spacelift credentials
-            spacelift_api_endpoint_resolved = spacelift_api_endpoint
-            if not spacelift_api_endpoint_resolved:
-                spacelift_api_endpoint_resolved = os.environ.get(
-                    "SPACELIFT_API_ENDPOINT"
-                )
-
-            spacelift_api_token = None
-            spacelift_api_key_id = None
-            spacelift_api_key_secret = None
-
-            if spacelift_api_endpoint_resolved:
-                if spacelift_api_token_env_var:
-                    logger.debug(
-                        "Reading Spacelift API token from environment variable %s",
-                        spacelift_api_token_env_var,
-                    )
-                    spacelift_api_token = os.environ.get(spacelift_api_token_env_var)
-
-                if spacelift_api_key_id_env_var:
-                    logger.debug(
-                        "Reading Spacelift API key ID from environment variable %s",
-                        spacelift_api_key_id_env_var,
-                    )
-                    spacelift_api_key_id = os.environ.get(spacelift_api_key_id_env_var)
-
-                if spacelift_api_key_secret_env_var:
-                    logger.debug(
-                        "Reading Spacelift API key secret from environment variable %s",
-                        spacelift_api_key_secret_env_var,
-                    )
-                    spacelift_api_key_secret = os.environ.get(
-                        spacelift_api_key_secret_env_var
-                    )
-
-            # Build the Config object
+            # Build the Config object with core options + provider options
             config = Config(
                 neo4j_uri=neo4j_uri,
                 neo4j_user=neo4j_user,
@@ -2250,137 +1824,13 @@ class CLI:
                 neo4j_database=neo4j_database,
                 selected_modules=selected_modules,
                 update_tag=update_tag,
-                aws_sync_all_profiles=aws_sync_all_profiles,
-                aws_regions=aws_regions,
-                aws_best_effort_mode=aws_best_effort_mode,
-                aws_cloudtrail_management_events_lookback_hours=aws_cloudtrail_management_events_lookback_hours,
-                experimental_aws_inspector_batch=experimental_aws_inspector_batch,
-                aws_tagging_api_cleanup_batch=aws_tagging_api_cleanup_batch,
-                azure_sync_all_subscriptions=azure_sync_all_subscriptions,
-                azure_sp_auth=azure_sp_auth,
-                azure_tenant_id=azure_tenant_id,
-                azure_client_id=azure_client_id,
-                azure_client_secret=azure_client_secret,
-                azure_subscription_id=azure_subscription_id,
-                entra_tenant_id=entra_tenant_id,
-                entra_client_id=entra_client_id,
-                entra_client_secret=entra_client_secret,
-                aws_requested_syncs=aws_requested_syncs,
-                aws_guardduty_severity_threshold=aws_guardduty_severity_threshold,
                 analysis_job_directory=analysis_job_directory,
-                oci_sync_all_profiles=oci_sync_all_profiles,
-                okta_org_id=okta_org_id,
-                okta_api_key=okta_api_key,
-                okta_base_domain=okta_base_domain,
-                okta_saml_role_regex=okta_saml_role_regex,
-                github_config=github_config,
-                github_commit_lookback_days=github_commit_lookback_days,
-                digitalocean_token=digitalocean_token,
-                permission_relationships_file=permission_relationships_file,
-                azure_permission_relationships_file=azure_permission_relationships_file,
-                gcp_requested_syncs=gcp_requested_syncs,
-                gcp_permission_relationships_file=gcp_permission_relationships_file,
-                jamf_base_uri=jamf_base_uri,
-                jamf_user=jamf_user,
-                jamf_password=jamf_password,
-                kandji_base_uri=kandji_base_uri,
-                kandji_tenant_id=kandji_tenant_id,
-                kandji_token=kandji_token,
-                k8s_kubeconfig=k8s_kubeconfig,
-                managed_kubernetes=managed_kubernetes,
                 statsd_enabled=statsd_enabled,
                 statsd_prefix=statsd_prefix,
                 statsd_host=statsd_host,
                 statsd_port=statsd_port,
-                pagerduty_api_key=pagerduty_api_key,
-                pagerduty_request_timeout=pagerduty_request_timeout,
-                nist_cve_url=nist_cve_url,
-                cve_enabled=cve_enabled,
-                cve_api_key=cve_api_key,
-                crowdstrike_client_id=crowdstrike_client_id,
-                crowdstrike_client_secret=crowdstrike_client_secret,
-                crowdstrike_api_url=crowdstrike_api_url,
-                gsuite_auth_method=gsuite_auth_method,
-                gsuite_config=gsuite_config,
-                googleworkspace_auth_method=googleworkspace_auth_method,
-                googleworkspace_config=googleworkspace_config,
-                jumpcloud_api_key=jumpcloud_api_key,
-                jumpcloud_org_id=jumpcloud_org_id,
-                lastpass_cid=lastpass_cid,
-                lastpass_provhash=lastpass_provhash,
-                bigfix_username=bigfix_username,
-                bigfix_password=bigfix_password,
-                bigfix_root_url=bigfix_root_url,
-                duo_api_key=duo_api_key,
-                duo_api_secret=duo_api_secret,
-                duo_api_hostname=duo_api_hostname,
-                workday_api_url=workday_api_url,
-                workday_api_login=workday_api_login,
-                workday_api_password=workday_api_password,
-                gitlab_url=gitlab_url,
-                gitlab_token=gitlab_token,
-                gitlab_organization_id=gitlab_organization_id,
-                gitlab_commits_since_days=gitlab_commits_since_days,
-                semgrep_app_token=semgrep_app_token,
-                semgrep_dependency_ecosystems=semgrep_dependency_ecosystems,
-                snipeit_base_uri=snipeit_base_uri,
-                snipeit_token=snipeit_token,
-                snipeit_tenant_id=snipeit_tenant_id,
-                tailscale_token=tailscale_token,
-                tailscale_org=tailscale_org,
-                tailscale_base_url=tailscale_base_url,
-                cloudflare_token=cloudflare_token,
-                openai_apikey=openai_apikey,
-                openai_org_id=openai_org_id,
-                anthropic_apikey=anthropic_apikey,
-                sentry_token=sentry_token,
-                sentry_org=sentry_org,
-                sentry_host=sentry_host,
-                subimage_client_id=subimage_client_id,
-                subimage_client_secret=subimage_client_secret,
-                subimage_tenant_url=subimage_tenant_url,
-                subimage_authkit_url=subimage_authkit_url,
-                airbyte_client_id=airbyte_client_id,
-                airbyte_client_secret=airbyte_client_secret,
-                airbyte_api_url=airbyte_api_url,
-                docker_scout_results_dir=docker_scout_results_dir,
-                docker_scout_s3_bucket=docker_scout_s3_bucket,
-                docker_scout_s3_prefix=docker_scout_s3_prefix,
-                trivy_s3_bucket=trivy_s3_bucket,
-                trivy_s3_prefix=trivy_s3_prefix,
-                syft_s3_bucket=syft_s3_bucket,
-                syft_s3_prefix=syft_s3_prefix,
-                syft_results_dir=syft_results_dir,
-                aibom_s3_bucket=aibom_s3_bucket,
-                aibom_s3_prefix=aibom_s3_prefix,
-                aibom_results_dir=aibom_results_dir,
-                ontology_users_source=ontology_users_source,
-                ontology_devices_source=ontology_devices_source,
-                trivy_results_dir=trivy_results_dir,
-                scaleway_access_key=scaleway_access_key,
-                scaleway_secret_key=scaleway_secret_key,
-                scaleway_org=scaleway_org,
-                sentinelone_api_url=sentinelone_api_url,
-                sentinelone_api_token=sentinelone_api_token,
-                sentinelone_account_ids=sentinelone_account_ids_list,
-                sentinelone_site_ids=sentinelone_site_ids_list,
-                spacelift_api_endpoint=spacelift_api_endpoint_resolved,
-                spacelift_api_token=spacelift_api_token,
-                spacelift_api_key_id=spacelift_api_key_id,
-                spacelift_api_key_secret=spacelift_api_key_secret,
-                spacelift_ec2_ownership_aws_profile=spacelift_ec2_ownership_aws_profile,
-                spacelift_ec2_ownership_s3_bucket=spacelift_ec2_ownership_s3_bucket,
-                spacelift_ec2_ownership_s3_prefix=spacelift_ec2_ownership_s3_prefix,
-                keycloak_client_id=keycloak_client_id,
-                keycloak_client_secret=keycloak_client_secret,
-                keycloak_realm=keycloak_realm,
-                keycloak_url=keycloak_url,
-                slack_token=slack_token,
-                slack_teams=slack_teams,
-                slack_channels_memberships=slack_channels_memberships,
-                ubuntu_security_enabled=ubuntu_security_enabled,
-                ubuntu_security_api_url=ubuntu_security_api_url,
                 async_fetch=async_fetch,
+                **config_kwargs,
             )
 
             # Run the sync
@@ -2389,7 +1839,7 @@ class CLI:
         return app
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> None:
     """
     Default entrypoint for the cartography command line interface.
 
