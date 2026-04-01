@@ -14,12 +14,26 @@ from cartography.intel.okta import origins
 from cartography.intel.okta import roles
 from cartography.intel.okta import users
 from cartography.intel.okta.sync_state import OktaSyncState
+from cartography.graph.metadata import ModuleMetadata
 from cartography.stats import get_stats_client
 from cartography.util import merge_module_sync_metadata
 from cartography.util import run_cleanup_job
 from cartography.util import timeit
 
 logger = logging.getLogger(__name__)
+
+MODULE_METADATA = ModuleMetadata(
+    name="okta",
+    depends_on=[],
+    provides=[
+        "OktaOrganization",
+        "OktaUser",
+        "OktaGroup",
+        "OktaApplication",
+        "OktaFactor",
+        "OktaTrustedOrigin",
+    ],
+)
 stat_handler = get_stats_client(__name__)
 
 

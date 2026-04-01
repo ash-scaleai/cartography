@@ -23,11 +23,125 @@ from cartography.util import run_cleanup_job
 from cartography.util import run_scoped_analysis_job
 from cartography.util import timeit
 
+from cartography.graph.metadata import ModuleMetadata
+
 from . import ec2
 from . import organizations
 from .resources import RESOURCE_FUNCTIONS
 
 stat_handler = get_stats_client(__name__)
+
+# ---------------------------------------------------------------------------
+# Explicit dependency declarations for AWS sub-modules.
+# Derived from the `module_dependencies` dict and RESOURCE_FUNCTIONS ordering.
+# ---------------------------------------------------------------------------
+MODULE_METADATA: list[ModuleMetadata] = [
+    ModuleMetadata(
+        name="aws",
+        depends_on=[],
+        provides=["AWSAccount"],
+    ),
+    ModuleMetadata(
+        name="aws.iam",
+        depends_on=["aws"],
+        provides=["AWSUser", "AWSGroup", "AWSRole", "AWSPolicy"],
+    ),
+    ModuleMetadata(
+        name="aws.s3",
+        depends_on=["aws"],
+        provides=["S3Bucket", "S3Acl"],
+    ),
+    ModuleMetadata(
+        name="aws.kms",
+        depends_on=["aws"],
+        provides=["KMSKey", "KMSAlias", "KMSGrant"],
+    ),
+    ModuleMetadata(
+        name="aws.dynamodb",
+        depends_on=["aws", "aws.kms"],
+        provides=["DynamoDBTable"],
+    ),
+    ModuleMetadata(
+        name="aws.ec2.instances",
+        depends_on=["aws"],
+        provides=["EC2Instance"],
+    ),
+    ModuleMetadata(
+        name="aws.ec2.images",
+        depends_on=["aws", "aws.ec2.instances"],
+        provides=["EC2Image"],
+    ),
+    ModuleMetadata(
+        name="aws.ec2.security_groups",
+        depends_on=["aws"],
+        provides=["EC2SecurityGroup", "IpRule", "IpRange"],
+    ),
+    ModuleMetadata(
+        name="aws.ec2.subnets",
+        depends_on=["aws"],
+        provides=["EC2Subnet"],
+    ),
+    ModuleMetadata(
+        name="aws.ec2.load_balancers",
+        depends_on=["aws", "aws.ec2.subnets", "aws.ec2.instances"],
+        provides=["LoadBalancer"],
+    ),
+    ModuleMetadata(
+        name="aws.ec2.load_balancers_v2",
+        depends_on=["aws", "aws.ec2.subnets", "aws.ec2.instances"],
+        provides=["LoadBalancerV2"],
+    ),
+    ModuleMetadata(
+        name="aws.ec2.network_interfaces",
+        depends_on=["aws"],
+        provides=["NetworkInterface"],
+    ),
+    ModuleMetadata(
+        name="aws.ec2.load_balancers_v2_expose",
+        depends_on=["aws", "aws.ec2.load_balancers_v2", "aws.ec2.network_interfaces"],
+        provides=[],
+    ),
+    ModuleMetadata(
+        name="aws.ec2.vpc",
+        depends_on=["aws"],
+        provides=["AWSVpc"],
+    ),
+    ModuleMetadata(
+        name="aws.ec2.vpc_endpoints",
+        depends_on=["aws"],
+        provides=["AWSVpcEndpoint"],
+    ),
+    ModuleMetadata(
+        name="aws.ec2.route_tables",
+        depends_on=["aws", "aws.ec2.vpc_endpoints"],
+        provides=["EC2RouteTable"],
+    ),
+    ModuleMetadata(
+        name="aws.ecs",
+        depends_on=["aws", "aws.ec2.instances"],
+        provides=["ECSCluster", "ECSContainerInstance", "ECSService", "ECSTask"],
+    ),
+    ModuleMetadata(
+        name="aws.ssm",
+        depends_on=["aws", "aws.ec2.instances"],
+        provides=["SSMInstanceInformation", "SSMInstancePatch"],
+    ),
+    ModuleMetadata(
+        name="aws.lambda_function",
+        depends_on=["aws"],
+        provides=["AWSLambda"],
+    ),
+    ModuleMetadata(
+        name="aws.rds",
+        depends_on=["aws"],
+        provides=["RDSInstance", "RDSCluster"],
+    ),
+    ModuleMetadata(
+        name="aws.eks",
+        depends_on=["aws"],
+        provides=["EKSCluster"],
+    ),
+]
 logger = logging.getLogger(__name__)
 
 

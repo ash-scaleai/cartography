@@ -38,10 +38,25 @@ from . import storage
 from . import subscription
 from . import synapse
 from . import tenant
+from cartography.graph.metadata import ModuleMetadata
+
 from .util.credentials import Authenticator
 from .util.credentials import Credentials
 
 logger = logging.getLogger(__name__)
+
+MODULE_METADATA = ModuleMetadata(
+    name="azure",
+    depends_on=[],
+    provides=[
+        "AzureTenant",
+        "AzureSubscription",
+        "AzureCosmosDBAccount",
+        "AzureSQLServer",
+        "AzureStorageAccount",
+        "AzureVirtualMachine",
+    ],
+)
 
 
 def _sync_one_subscription(

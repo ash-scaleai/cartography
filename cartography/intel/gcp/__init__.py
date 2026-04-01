@@ -60,11 +60,25 @@ from cartography.intel.gcp.vertex.training_pipelines import sync_training_pipeli
 from cartography.models.gcp.crm.folders import GCPFolderSchema
 from cartography.models.gcp.crm.organizations import GCPOrganizationSchema
 from cartography.models.gcp.crm.projects import GCPProjectSchema
+from cartography.graph.metadata import ModuleMetadata
 from cartography.util import run_analysis_job
 from cartography.util import run_scoped_analysis_job
 from cartography.util import timeit
 
 logger = logging.getLogger(__name__)
+
+MODULE_METADATA = ModuleMetadata(
+    name="gcp",
+    depends_on=[],
+    provides=[
+        "GCPOrganization",
+        "GCPFolder",
+        "GCPProject",
+        "GCPInstance",
+        "GCPBucket",
+        "GKECluster",
+    ],
+)
 
 # Mapping of service short names to their full names as in docs. See https://developers.google.com/apis-explorer,
 # and https://cloud.google.com/service-usage/docs/reference/rest/v1/services#ServiceConfig

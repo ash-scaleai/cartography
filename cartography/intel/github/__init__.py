@@ -15,9 +15,21 @@ import cartography.intel.github.users
 from cartography.client.core.tx import read_list_of_values_tx
 from cartography.config import Config
 from cartography.intel.github.app_auth import make_credential
+from cartography.graph.metadata import ModuleMetadata
 from cartography.util import timeit
 
 logger = logging.getLogger(__name__)
+
+MODULE_METADATA = ModuleMetadata(
+    name="github",
+    depends_on=[],
+    provides=[
+        "GitHubOrganization",
+        "GitHubRepository",
+        "GitHubUser",
+        "GitHubTeam",
+    ],
+)
 
 
 def _get_repos_from_graph(neo4j_session: neo4j.Session, organization: str) -> list[str]:
