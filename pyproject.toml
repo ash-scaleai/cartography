@@ -53,6 +53,7 @@ dependencies = [
     "statsd",
     "packaging",
     "packageurl-python",
+    "pydantic>=2.0.0",
     "python-digitalocean>=1.16.0",
     "adal>=1.2.4",
     "azure-cli-core>=2.26.0",
