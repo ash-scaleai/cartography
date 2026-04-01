@@ -10,6 +10,9 @@ import neo4j.exceptions
 from neo4j import GraphDatabase
 from statsd import StatsClient
 
+from cartography.graph.scheduler import DAGScheduler
+from cartography.graph.scheduler import ModuleMetadata
+
 import cartography.intel.aibom
 import cartography.intel.airbyte
 import cartography.intel.analysis
@@ -116,6 +119,79 @@ TOP_LEVEL_MODULES: OrderedDict[str, Callable[..., None]] = OrderedDict(
         "analysis": cartography.intel.analysis.run,
     }
 )
+
+# Dependency declarations for top-level modules.
+# Modules not listed here (or listed with an empty list) have no dependencies
+# and can run as soon as "create-indexes" finishes.
+# "analysis" and "ontology" depend on all provider modules by convention.
+_PROVIDER_MODULES: list[str] = [
+    name for name in TOP_LEVEL_MODULES
+    if name not in ("create-indexes", "analysis", "ontology")
+]
+
+TOP_LEVEL_MODULE_DEPENDENCIES: dict[str, list[str]] = {
+    "create-indexes": [],
+    **{name: ["create-indexes"] for name in _PROVIDER_MODULES},
+    "ontology": _PROVIDER_MODULES.copy(),
+    "analysis": ["ontology"],
+}
+
+
+def _build_module_metadata(
+    selected_names: list[str] | None = None,
+) -> list[ModuleMetadata]:
+    """Build a list of ModuleMetadata from TOP_LEVEL_MODULES and their dependencies.
+
+    If *selected_names* is provided only those modules (and their transitive
+    dependencies) are included.
+    """
+    if selected_names is None:
+        selected_names = list(TOP_LEVEL_MODULES.keys())
+
+    # Resolve transitive dependencies so the DAG is self-contained
+    needed: set[str] = set()
+
+    def _resolve(name: str) -> None:
+        if name in needed:
+            return
+        needed.add(name)
+        for dep in TOP_LEVEL_MODULE_DEPENDENCIES.get(name, []):
+            _resolve(dep)
+
+    for name in selected_names:
+        _resolve(name)
+
+    modules: list[ModuleMetadata] = []
+    for name in TOP_LEVEL_MODULES:
+        if name not in needed:
+            continue
+        deps = [
+            d for d in TOP_LEVEL_MODULE_DEPENDENCIES.get(name, [])
+            if d in needed
+        ]
+        modules.append(
+            ModuleMetadata(
+                name=name,
+                depends_on=deps,
+                sync_func=TOP_LEVEL_MODULES[name],
+            ),
+        )
+    return modules
+
+
+def build_dag_scheduler(
+    selected_names: list[str] | None = None,
+) -> DAGScheduler:
+    """Create a DAGScheduler for top-level cartography modules.
+
+    Args:
+        selected_names: Optional list of module names to include. When ``None``
+            all modules in ``TOP_LEVEL_MODULES`` are used.
+
+    Returns:
+        A ready-to-use ``DAGScheduler`` instance.
+    """
+    return DAGScheduler(_build_module_metadata(selected_names))
 
 
 def get_all_modules() -> OrderedDict[str, Callable[..., None]]:
@@ -396,6 +472,55 @@ class Sync:
         logger.info(
             "Finishing async sync with update tag '%d'", config.update_tag,
         )
+        return STATUS_SUCCESS
+
+    def run_dag(
+        self,
+        neo4j_driver: neo4j.Driver,
+        config: Config,
+        dry_run: bool = False,
+    ) -> int:
+        """Execute stages concurrently using the DAG scheduler.
+
+        Modules are grouped into waves based on declared dependencies. All
+        modules in a wave execute in parallel; the next wave starts only
+        after every module in the current wave has finished.
+
+        Args:
+            neo4j_driver: A Neo4j driver instance.
+            config: Configuration object.
+            dry_run: If True, print the execution plan and return without
+                running any modules.
+
+        Returns:
+            STATUS_SUCCESS (0) if all modules succeed, STATUS_FAILURE (1)
+            if any module failed.
+        """
+        module_names = list(self._stages.keys())
+        metadata_list = _build_module_metadata(module_names)
+
+        # Override sync_func with whatever was registered via add_stage
+        for mod in metadata_list:
+            if mod.name in self._stages:
+                mod.sync_func = self._stages[mod.name]
+
+        scheduler = DAGScheduler(metadata_list)
+
+        if dry_run:
+            plan = scheduler.dry_run()
+            logger.info("Dry-run execution plan:\n%s", plan)
+            return STATUS_SUCCESS
+
+        logger.info("Starting DAG sync with update tag '%d'", config.update_tag)
+        with neo4j_driver.session(database=config.neo4j_database) as neo4j_session:
+            results = scheduler.execute(neo4j_session, config)
+
+        failed = [name for name, status in results.items() if status != "success"]
+        if failed:
+            logger.error("DAG sync completed with failures: %s", failed)
+            return STATUS_FAILURE
+
+        logger.info("Finishing DAG sync with update tag '%d'", config.update_tag)
         return STATUS_SUCCESS
 
     @classmethod
