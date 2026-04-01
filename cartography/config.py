@@ -293,6 +293,15 @@ class Config:
     :type skip_cleanup_safety: bool
     :param skip_cleanup_safety: If True, disable the cleanup safety net entirely and always run cleanup
         regardless of record count changes. Default is False. Optional.
+    :type cleanup_history_size: int
+    :param cleanup_history_size: Number of historical record counts to retain per module for
+        anomaly detection trending. Defaults to 10. Optional.
+    :type anomaly_std_devs: float
+    :param anomaly_std_devs: Number of standard deviations from the rolling average to trigger
+        an anomaly alert during cleanup safety checks. Defaults to 2.0. Optional.
+    :type circuit_breaker_threshold: int
+    :param circuit_breaker_threshold: Number of consecutive sync failures before the circuit
+        breaker trips and blocks further syncs for a module. Defaults to 3. Optional.
     """
 
     def __init__(
@@ -443,6 +452,9 @@ class Config:
         async_fetch=False,
         cleanup_threshold=0.5,
         skip_cleanup_safety=False,
+        cleanup_history_size=10,
+        anomaly_std_devs=2.0,
+        circuit_breaker_threshold=3,
     ):
         self.neo4j_uri = neo4j_uri
         self.neo4j_user = neo4j_user
@@ -592,3 +604,6 @@ class Config:
         self.async_fetch = async_fetch
         self.cleanup_threshold = cleanup_threshold
         self.skip_cleanup_safety = skip_cleanup_safety
+        self.cleanup_history_size = cleanup_history_size
+        self.anomaly_std_devs = anomaly_std_devs
+        self.circuit_breaker_threshold = circuit_breaker_threshold

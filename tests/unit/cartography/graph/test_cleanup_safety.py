@@ -1,199 +1,230 @@
+import json
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
 
-from cartography.graph.cleanup_safety import should_skip_cleanup
-from cartography.graph.job import GraphJob
-from cartography.graph.statement import GraphStatement
+from cartography.graph.cleanup_safety import CleanupSafety
 
 
-class TestShouldSkipCleanup:
-    """Tests for the cleanup safety net logic."""
+def _make_combined_session(history_counts=None, circuit_failures=None):
+    """
+    Create a mock Neo4j session that simulates both CleanupHistory
+    and CircuitBreakerState node storage.
+    """
+    history_storage = {
+        "counts": json.dumps(history_counts) if history_counts else None,
+    }
+    cb_storage = {"failures": circuit_failures}
 
-    @patch('cartography.graph.cleanup_safety.update_record_count')
-    @patch('cartography.graph.cleanup_safety.get_previous_record_count')
-    def test_skip_cleanup_when_count_drops_below_threshold(
-        self, mock_get_prev, mock_update,
-    ):
-        """If current count is below the threshold ratio of previous, skip cleanup."""
-        mock_get_prev.return_value = 100
-        neo4j_session = MagicMock()
+    def run_side_effect(query, **kwargs):
+        result = MagicMock()
 
-        result = should_skip_cleanup(
-            neo4j_session, module_name='TestModule', current_count=30, threshold=0.5,
+        if "CleanupHistory" in query:
+            if "RETURN" in query:
+                record = MagicMock()
+                record.__getitem__ = lambda self, key: history_storage["counts"]
+                result.single.return_value = (
+                    record if history_storage["counts"] is not None else None
+                )
+            elif "SET" in query:
+                history_storage["counts"] = kwargs.get(
+                    "counts_json", history_storage["counts"],
+                )
+        elif "CircuitBreakerState" in query:
+            if "RETURN" in query:
+                if cb_storage["failures"] is not None:
+                    record = MagicMock()
+                    record.__getitem__ = lambda self, key: cb_storage["failures"]
+                    result.single.return_value = record
+                else:
+                    result.single.return_value = None
+            elif "ON CREATE SET" in query:
+                if cb_storage["failures"] is None:
+                    cb_storage["failures"] = 1
+                else:
+                    cb_storage["failures"] += 1
+            elif "consecutive_failures = 0" in query:
+                cb_storage["failures"] = 0
+        return result
+
+    session = MagicMock()
+    session.run.side_effect = run_side_effect
+    return session
+
+
+class TestCleanupSafety:
+    def test_safe_when_no_issues(self):
+        session = _make_combined_session(
+            history_counts=[100, 100, 100, 100, 100],
+            circuit_failures=0,
+        )
+        safety = CleanupSafety()
+        is_safe, reason = safety.check_cleanup_safe(
+            session, "test_module", 100, previous_count=105,
+        )
+        assert is_safe is True
+        assert reason == ""
+
+    def test_blocked_by_circuit_breaker(self):
+        session = _make_combined_session(
+            history_counts=[100, 100, 100],
+            circuit_failures=3,
+        )
+        safety = CleanupSafety()
+        is_safe, reason = safety.check_cleanup_safe(
+            session, "test_module", 100,
+        )
+        assert is_safe is False
+        assert "Circuit breaker" in reason
+
+    def test_blocked_by_threshold(self):
+        session = _make_combined_session(
+            history_counts=[100, 100, 100],
+            circuit_failures=0,
+        )
+        safety = CleanupSafety(cleanup_threshold=0.5)
+        # previous=100, current=10 -> removal fraction = 0.9 > 0.5
+        is_safe, reason = safety.check_cleanup_safe(
+            session, "test_module", 10, previous_count=100,
+        )
+        assert is_safe is False
+        assert "90.0%" in reason
+
+    def test_threshold_skipped_when_no_previous(self):
+        session = _make_combined_session(
+            history_counts=[100, 100, 100],
+            circuit_failures=0,
+        )
+        safety = CleanupSafety(cleanup_threshold=0.5)
+        is_safe, reason = safety.check_cleanup_safe(
+            session, "test_module", 100,
+        )
+        assert is_safe is True
+
+    def test_blocked_by_anomaly(self):
+        # History all around 100, current count is 500 -> anomalous
+        session = _make_combined_session(
+            history_counts=[100, 100, 100, 102, 98, 101, 99, 100, 100, 100],
+            circuit_failures=0,
+        )
+        safety = CleanupSafety()
+        is_safe, reason = safety.check_cleanup_safe(
+            session, "test_module", 500,
+        )
+        assert is_safe is False
+        assert "Anomaly" in reason
+
+    def test_anomaly_not_triggered_with_insufficient_history(self):
+        session = _make_combined_session(
+            history_counts=[100],
+            circuit_failures=0,
+        )
+        safety = CleanupSafety()
+        is_safe, reason = safety.check_cleanup_safe(
+            session, "test_module", 500,
+        )
+        assert is_safe is True
+
+    def test_record_count(self):
+        session = _make_combined_session(
+            history_counts=[100, 200],
+            circuit_failures=0,
+        )
+        safety = CleanupSafety()
+        safety.record_count(session, "test_module", 300)
+        history = safety.history.get_history(session, "test_module")
+        assert history == [100, 200, 300]
+
+    def test_record_sync_success(self):
+        session = _make_combined_session(
+            history_counts=None,
+            circuit_failures=3,
+        )
+        safety = CleanupSafety()
+        assert safety.circuit_breaker.is_open(session, "test_module") is True
+
+        safety.record_sync_success(session, "test_module")
+        assert safety.circuit_breaker.is_open(session, "test_module") is False
+
+    def test_record_sync_failure(self):
+        session = _make_combined_session(
+            history_counts=None,
+            circuit_failures=None,
+        )
+        safety = CleanupSafety()
+        safety.record_sync_failure(session, "test_module")
+        assert (
+            safety.circuit_breaker.get_failure_count(session, "test_module") == 1
         )
 
-        assert result is True
-        mock_update.assert_called_once_with(neo4j_session, 'TestModule', 30)
-
-    @patch('cartography.graph.cleanup_safety.update_record_count')
-    @patch('cartography.graph.cleanup_safety.get_previous_record_count')
-    def test_allow_cleanup_when_count_above_threshold(
-        self, mock_get_prev, mock_update,
-    ):
-        """If current count is at or above the threshold ratio, allow cleanup."""
-        mock_get_prev.return_value = 100
-        neo4j_session = MagicMock()
-
-        result = should_skip_cleanup(
-            neo4j_session, module_name='TestModule', current_count=60, threshold=0.5,
+    def test_get_anomaly_alert_none(self):
+        session = _make_combined_session(
+            history_counts=[100, 100, 100, 100, 100],
+            circuit_failures=0,
         )
+        safety = CleanupSafety()
+        alert = safety.get_anomaly_alert(session, "test_module", 100)
+        assert alert is None
 
-        assert result is False
-        mock_update.assert_called_once_with(neo4j_session, 'TestModule', 60)
-
-    @patch('cartography.graph.cleanup_safety.update_record_count')
-    @patch('cartography.graph.cleanup_safety.get_previous_record_count')
-    def test_allow_cleanup_when_count_exactly_at_threshold(
-        self, mock_get_prev, mock_update,
-    ):
-        """If current count is exactly at the threshold ratio, allow cleanup."""
-        mock_get_prev.return_value = 100
-        neo4j_session = MagicMock()
-
-        result = should_skip_cleanup(
-            neo4j_session, module_name='TestModule', current_count=50, threshold=0.5,
+    def test_get_anomaly_alert_triggered(self):
+        session = _make_combined_session(
+            history_counts=[100, 100, 100, 102, 98, 101, 99, 100, 100, 100],
+            circuit_failures=0,
         )
+        safety = CleanupSafety()
+        alert = safety.get_anomaly_alert(session, "test_module", 500)
+        assert alert is not None
+        assert alert.module_name == "test_module"
+        assert alert.current_count == 500
 
-        assert result is False
-
-    @patch('cartography.graph.cleanup_safety.update_record_count')
-    @patch('cartography.graph.cleanup_safety.get_previous_record_count')
-    def test_first_run_no_previous_count(
-        self, mock_get_prev, mock_update,
-    ):
-        """On first run with no previous count, proceed with cleanup."""
-        mock_get_prev.return_value = None
-        neo4j_session = MagicMock()
-
-        result = should_skip_cleanup(
-            neo4j_session, module_name='TestModule', current_count=50, threshold=0.5,
+    def test_first_run_no_history(self):
+        """First run with no history should be safe."""
+        session = _make_combined_session(
+            history_counts=None,
+            circuit_failures=None,
         )
-
-        assert result is False
-        mock_update.assert_called_once_with(neo4j_session, 'TestModule', 50)
-
-    @patch('cartography.graph.cleanup_safety.update_record_count')
-    @patch('cartography.graph.cleanup_safety.get_previous_record_count')
-    def test_previous_count_zero(
-        self, mock_get_prev, mock_update,
-    ):
-        """If previous count was 0, proceed with cleanup (avoid division by zero)."""
-        mock_get_prev.return_value = 0
-        neo4j_session = MagicMock()
-
-        result = should_skip_cleanup(
-            neo4j_session, module_name='TestModule', current_count=10, threshold=0.5,
+        safety = CleanupSafety()
+        is_safe, reason = safety.check_cleanup_safe(
+            session, "new_module", 100,
         )
+        assert is_safe is True
+        assert reason == ""
 
-        assert result is False
-
-    @patch('cartography.graph.cleanup_safety.update_record_count')
-    @patch('cartography.graph.cleanup_safety.get_previous_record_count')
-    def test_current_count_zero_skips_cleanup(
-        self, mock_get_prev, mock_update,
-    ):
-        """If current count is 0 and there was previous data, skip cleanup."""
-        mock_get_prev.return_value = 100
-        neo4j_session = MagicMock()
-
-        result = should_skip_cleanup(
-            neo4j_session, module_name='TestModule', current_count=0, threshold=0.5,
+    def test_all_same_counts_normal(self):
+        """When all historical counts are identical, same count is normal."""
+        session = _make_combined_session(
+            history_counts=[50, 50, 50, 50, 50],
+            circuit_failures=0,
         )
-
-        assert result is True
-
-    @patch('cartography.graph.cleanup_safety.update_record_count')
-    @patch('cartography.graph.cleanup_safety.get_previous_record_count')
-    def test_custom_threshold(
-        self, mock_get_prev, mock_update,
-    ):
-        """Test with a custom threshold of 0.8 (80%)."""
-        mock_get_prev.return_value = 100
-        neo4j_session = MagicMock()
-
-        # 70% of previous - should skip with 80% threshold
-        result = should_skip_cleanup(
-            neo4j_session, module_name='TestModule', current_count=70, threshold=0.8,
+        safety = CleanupSafety()
+        is_safe, reason = safety.check_cleanup_safe(
+            session, "test_module", 50,
         )
-        assert result is True
+        assert is_safe is True
 
-        # 85% of previous - should allow with 80% threshold
-        result = should_skip_cleanup(
-            neo4j_session, module_name='TestModule', current_count=85, threshold=0.8,
+    def test_all_same_counts_different_value_anomalous(self):
+        """When all historical counts are identical, any different value is anomalous."""
+        session = _make_combined_session(
+            history_counts=[50, 50, 50, 50, 50],
+            circuit_failures=0,
         )
-        assert result is False
-
-
-class TestGraphJobRunWithSafety:
-    """Tests for the GraphJob.run_with_safety method."""
-
-    def _make_job(self):
-        stmt = GraphStatement("MATCH (n:TestNode) WHERE n.lastupdated <> $UPDATE_TAG DETACH DELETE n")
-        stmt.merge_parameters({"UPDATE_TAG": 1234})
-        return GraphJob("Test cleanup", [stmt], "TestModule")
-
-    @patch('cartography.graph.job.should_skip_cleanup')
-    def test_run_with_safety_proceeds_when_safe(self, mock_should_skip):
-        """When should_skip_cleanup returns False, the job runs."""
-        mock_should_skip.return_value = False
-        neo4j_session = MagicMock()
-        job = self._make_job()
-
-        with patch.object(job, 'run') as mock_run:
-            job.run_with_safety(neo4j_session, current_record_count=100, threshold=0.5)
-            mock_run.assert_called_once_with(neo4j_session)
-
-    @patch('cartography.graph.job.should_skip_cleanup')
-    def test_run_with_safety_skips_when_unsafe(self, mock_should_skip):
-        """When should_skip_cleanup returns True, the job is skipped."""
-        mock_should_skip.return_value = True
-        neo4j_session = MagicMock()
-        job = self._make_job()
-
-        with patch.object(job, 'run') as mock_run:
-            job.run_with_safety(neo4j_session, current_record_count=10, threshold=0.5)
-            mock_run.assert_not_called()
-
-    def test_run_with_safety_skip_safety_flag(self):
-        """When skip_safety=True, the job always runs without checking."""
-        neo4j_session = MagicMock()
-        job = self._make_job()
-
-        with patch.object(job, 'run') as mock_run, \
-             patch('cartography.graph.job.should_skip_cleanup') as mock_should_skip:
-            job.run_with_safety(
-                neo4j_session, current_record_count=10, threshold=0.5, skip_safety=True,
-            )
-            mock_should_skip.assert_not_called()
-            mock_run.assert_called_once_with(neo4j_session)
-
-    @patch('cartography.graph.job.should_skip_cleanup')
-    def test_run_with_safety_uses_short_name_as_module(self, mock_should_skip):
-        """Verify that short_name is used as the module name for the safety check."""
-        mock_should_skip.return_value = False
-        neo4j_session = MagicMock()
-        job = self._make_job()
-
-        with patch.object(job, 'run'):
-            job.run_with_safety(neo4j_session, current_record_count=100)
-
-        mock_should_skip.assert_called_once_with(
-            neo4j_session, 'TestModule', 100, 0.5,
+        safety = CleanupSafety()
+        is_safe, reason = safety.check_cleanup_safe(
+            session, "test_module", 51,
         )
+        assert is_safe is False
+        assert "Anomaly" in reason
 
-    @patch('cartography.graph.job.should_skip_cleanup')
-    def test_run_with_safety_falls_back_to_name(self, mock_should_skip):
-        """When short_name is None, use the full job name as module identifier."""
-        mock_should_skip.return_value = False
-        neo4j_session = MagicMock()
-        stmt = GraphStatement("MATCH (n) RETURN n")
-        job = GraphJob("Full job name", [stmt], short_name=None)
-
-        with patch.object(job, 'run'):
-            job.run_with_safety(neo4j_session, current_record_count=100)
-
-        mock_should_skip.assert_called_once_with(
-            neo4j_session, 'Full job name', 100, 0.5,
+    def test_configurable_parameters(self):
+        """Verify that config parameters are properly passed through."""
+        safety = CleanupSafety(
+            history_size=5,
+            anomaly_std_devs=3.0,
+            circuit_breaker_threshold=5,
+            cleanup_threshold=0.8,
         )
+        assert safety.history.history_size == 5
+        assert safety.anomaly_std_devs == 3.0
+        assert safety.circuit_breaker.threshold == 5
+        assert safety.cleanup_threshold == 0.8

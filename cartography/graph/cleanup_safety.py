@@ -1,135 +1,189 @@
 import logging
-import time
+from typing import List
 from typing import Optional
 
 import neo4j
 
+from cartography.graph.anomaly_detection import AnomalyAlert
+from cartography.graph.anomaly_detection import create_anomaly_alert
+from cartography.graph.anomaly_detection import DEFAULT_ANOMALY_STD_DEVS
+from cartography.graph.anomaly_detection import is_anomalous
+from cartography.graph.circuit_breaker import CircuitBreaker
+from cartography.graph.circuit_breaker import DEFAULT_CIRCUIT_BREAKER_THRESHOLD
+from cartography.graph.cleanup_history import DEFAULT_HISTORY_SIZE
+from cartography.graph.cleanup_history import RecordCountHistory
+
 logger = logging.getLogger(__name__)
 
-# Default threshold: if current count is below 50% of previous count, skip cleanup
-DEFAULT_CLEANUP_THRESHOLD = 0.5
+# Phase 0.4 basic threshold: if a cleanup would remove more than this
+# fraction of records, block it by default.
+DEFAULT_CLEANUP_THRESHOLD = 0.9
 
 
-def get_previous_record_count(
-    neo4j_session: neo4j.Session,
-    module_name: str,
-) -> Optional[int]:
+class CleanupSafety:
     """
-    Retrieve the previous record count for a module from the CleanupSyncMetadata node.
+    Extended cleanup safety net integrating Phase 0.4 threshold checks with
+    historical trending, anomaly detection, and circuit breaker.
+
+    This class orchestrates three safety mechanisms:
+    1. **History tracking**: Records counts after every sync so trends can
+       be analyzed.
+    2. **Anomaly detection**: Flags counts that deviate significantly from
+       the rolling average before cleanup runs.
+    3. **Circuit breaker**: Blocks syncs for modules that have failed
+       repeatedly in succession.
+
+    All three mechanisms are additive to the Phase 0.4 basic threshold
+    check (which blocks cleanup if it would remove more than a configurable
+    fraction of records).
 
     Args:
-        neo4j_session: Active Neo4j session.
-        module_name: The module/node label identifier (e.g., 'AWSEC2Instance').
-
-    Returns:
-        The previous record count, or None if no metadata exists yet (first run).
+        history_size: Number of historical counts to retain per module.
+        anomaly_std_devs: Number of standard deviations to trigger anomaly.
+        circuit_breaker_threshold: Consecutive failures to trip the circuit breaker.
+        cleanup_threshold: Phase 0.4 fraction threshold for blocking cleanup.
     """
-    result = neo4j_session.run(
-        "MATCH (n:CleanupSyncMetadata {module_name: $module_name}) "
-        "RETURN n.last_record_count AS last_record_count",
-        module_name=module_name,
-    )
-    record = result.single()
-    if record is None:
-        return None
-    return record["last_record_count"]
 
+    def __init__(
+        self,
+        history_size: int = DEFAULT_HISTORY_SIZE,
+        anomaly_std_devs: float = DEFAULT_ANOMALY_STD_DEVS,
+        circuit_breaker_threshold: int = DEFAULT_CIRCUIT_BREAKER_THRESHOLD,
+        cleanup_threshold: float = DEFAULT_CLEANUP_THRESHOLD,
+    ):
+        self.history = RecordCountHistory(history_size=history_size)
+        self.circuit_breaker = CircuitBreaker(threshold=circuit_breaker_threshold)
+        self.anomaly_std_devs = anomaly_std_devs
+        self.cleanup_threshold = cleanup_threshold
 
-def update_record_count(
-    neo4j_session: neo4j.Session,
-    module_name: str,
-    record_count: int,
-) -> None:
-    """
-    Create or update the CleanupSyncMetadata node for a module with the current record count.
+    def check_cleanup_safe(
+        self,
+        neo4j_session: neo4j.Session,
+        module_name: str,
+        current_count: int,
+        previous_count: Optional[int] = None,
+    ) -> tuple[bool, str]:
+        """
+        Determine whether it is safe to proceed with cleanup for a module.
 
-    Args:
-        neo4j_session: Active Neo4j session.
-        module_name: The module/node label identifier (e.g., 'AWSEC2Instance').
-        record_count: The number of records fetched in the current sync.
-    """
-    neo4j_session.run(
-        "MERGE (n:CleanupSyncMetadata {module_name: $module_name}) "
-        "ON CREATE SET n.firstseen = timestamp() "
-        "SET n.last_record_count = $record_count, "
-        "    n.last_sync_time = $sync_time",
-        module_name=module_name,
-        record_count=record_count,
-        sync_time=int(time.time()),
-    )
+        Runs the following checks in order:
+        1. Circuit breaker: if open, blocks immediately.
+        2. Phase 0.4 threshold: if previous_count is provided and cleanup
+           would remove > cleanup_threshold fraction, blocks.
+        3. Anomaly detection: if current count is anomalous relative to
+           history, blocks.
 
+        Args:
+            neo4j_session: Active Neo4j session.
+            module_name: Identifier for the module.
+            current_count: The current record count.
+            previous_count: The previous record count (for Phase 0.4 check).
+                If None, the Phase 0.4 threshold check is skipped.
 
-def should_skip_cleanup(
-    neo4j_session: neo4j.Session,
-    module_name: str,
-    current_count: int,
-    threshold: float = DEFAULT_CLEANUP_THRESHOLD,
-) -> bool:
-    """
-    Determine whether cleanup should be skipped based on the safety net check.
+        Returns:
+            Tuple of (is_safe, reason). If safe, reason is empty.
+        """
+        # Check 1: Circuit breaker
+        if self.circuit_breaker.is_open(neo4j_session, module_name):
+            reason = (
+                f"Circuit breaker is OPEN for module '{module_name}'. "
+                f"Skipping cleanup."
+            )
+            logger.warning(reason)
+            return False, reason
 
-    Compares the current record count against the previous run's count. If the current
-    count is below the configured threshold percentage of the previous count, cleanup
-    is skipped to prevent accidental data loss from partial fetches or API failures.
+        # Check 2: Phase 0.4 basic threshold
+        if previous_count is not None and previous_count > 0:
+            removal_fraction = (previous_count - current_count) / previous_count
+            if removal_fraction > self.cleanup_threshold:
+                reason = (
+                    f"Cleanup for module '{module_name}' would remove "
+                    f"{removal_fraction:.1%} of records (threshold: "
+                    f"{self.cleanup_threshold:.1%}). Blocking cleanup."
+                )
+                logger.warning(reason)
+                return False, reason
 
-    After the check, the current count is always recorded for the next run.
-
-    Args:
-        neo4j_session: Active Neo4j session.
-        module_name: The module/node label identifier (e.g., 'AWSEC2Instance').
-        current_count: The number of records fetched in the current sync.
-        threshold: The minimum ratio of current/previous counts required to proceed
-            with cleanup. Default is 0.5 (50%).
-
-    Returns:
-        True if cleanup should be skipped (count dropped below threshold),
-        False if cleanup should proceed.
-    """
-    previous_count = get_previous_record_count(neo4j_session, module_name)
-
-    # Always update the record count for next run
-    update_record_count(neo4j_session, module_name, current_count)
-
-    # First run: no previous data, proceed with cleanup
-    if previous_count is None:
-        logger.info(
-            "Module %s: first run with %d records. No previous count to compare. "
-            "Proceeding with cleanup.",
-            module_name,
-            current_count,
+        # Check 3: Anomaly detection
+        history = self.history.get_history(neo4j_session, module_name)
+        anomalous, anomaly_reason = is_anomalous(
+            current_count, history, self.anomaly_std_devs,
         )
-        return False
+        if anomalous:
+            reason = (
+                f"Anomaly detected for module '{module_name}': {anomaly_reason}. "
+                f"Blocking cleanup."
+            )
+            logger.warning(reason)
+            return False, reason
 
-    # Previous count was 0: avoid division issues, proceed with cleanup
-    if previous_count == 0:
-        logger.info(
-            "Module %s fetched %d records (previous: 0). Proceeding with cleanup.",
-            module_name,
-            current_count,
+        return True, ""
+
+    def record_count(
+        self,
+        neo4j_session: neo4j.Session,
+        module_name: str,
+        count: int,
+    ) -> None:
+        """
+        Record a count in history after a successful sync.
+
+        Should be called after every sync completes to build up the
+        historical data needed for anomaly detection.
+
+        Args:
+            neo4j_session: Active Neo4j session.
+            module_name: Identifier for the module.
+            count: The record count to store.
+        """
+        self.history.add_count(neo4j_session, module_name, count)
+
+    def record_sync_success(
+        self,
+        neo4j_session: neo4j.Session,
+        module_name: str,
+    ) -> None:
+        """
+        Record a successful sync, resetting the circuit breaker.
+
+        Args:
+            neo4j_session: Active Neo4j session.
+            module_name: Identifier for the module.
+        """
+        self.circuit_breaker.record_success(neo4j_session, module_name)
+
+    def record_sync_failure(
+        self,
+        neo4j_session: neo4j.Session,
+        module_name: str,
+    ) -> None:
+        """
+        Record a sync failure, incrementing the circuit breaker.
+
+        Args:
+            neo4j_session: Active Neo4j session.
+            module_name: Identifier for the module.
+        """
+        self.circuit_breaker.record_failure(neo4j_session, module_name)
+
+    def get_anomaly_alert(
+        self,
+        neo4j_session: neo4j.Session,
+        module_name: str,
+        current_count: int,
+    ) -> Optional[AnomalyAlert]:
+        """
+        Check for an anomaly and return an alert if one is detected.
+
+        Args:
+            neo4j_session: Active Neo4j session.
+            module_name: Identifier for the module.
+            current_count: The current record count.
+
+        Returns:
+            An AnomalyAlert if anomalous, None otherwise.
+        """
+        history = self.history.get_history(neo4j_session, module_name)
+        return create_anomaly_alert(
+            module_name, current_count, history, self.anomaly_std_devs,
         )
-        return False
-
-    ratio = current_count / previous_count
-
-    if ratio < threshold:
-        logger.warning(
-            "Module %s fetched %d records (previous: %d, ratio: %.1f%%, threshold: %.1f%%). "
-            "Skipping cleanup to prevent accidental data loss.",
-            module_name,
-            current_count,
-            previous_count,
-            ratio * 100,
-            threshold * 100,
-        )
-        return True
-
-    logger.info(
-        "Module %s fetched %d records (previous: %d, ratio: %.1f%%, threshold: %.1f%%). "
-        "Proceeding with cleanup.",
-        module_name,
-        current_count,
-        previous_count,
-        ratio * 100,
-        threshold * 100,
-    )
-    return False
