@@ -187,3 +187,28 @@ class CleanupSafety:
         return create_anomaly_alert(
             module_name, current_count, history, self.anomaly_std_devs,
         )
+
+
+# ─── Backward-compatible standalone function (used by job.py from Phase 0.4) ─
+
+_default_safety = CleanupSafety()
+
+
+def should_skip_cleanup(
+    neo4j_session: neo4j.Session,
+    module_name: str,
+    current_count: int,
+    threshold: float = DEFAULT_CLEANUP_THRESHOLD,
+) -> bool:
+    """
+    Backward-compatible wrapper around CleanupSafety.check_cleanup_safe().
+
+    Returns True if cleanup should be skipped (unsafe), False if it should proceed.
+    """
+    safety = CleanupSafety(cleanup_threshold=threshold)
+    is_safe, reason = safety.check_cleanup_safe(
+        neo4j_session, module_name, current_count,
+    )
+    if not is_safe:
+        logger.warning("should_skip_cleanup: %s", reason)
+    return not is_safe
