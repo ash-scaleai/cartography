@@ -1,0 +1,20 @@
+{
+  "module_name": "aws.s3.buckets",
+  "api_name": "list_buckets",
+  "recorded_at": "2026-03-15T12:00:00+00:00",
+  "schema_version": "1.0",
+  "response_data": [
+    {
+      "Name": "my-app-logs-prod",
+      "Region": "us-east-1",
+      "Arn": "arn:aws:s3:::my-app-logs-prod",
+      "CreationDate": "2023-11-01T09:00:00Z"
+    },
+    {
+      "Name": "data-warehouse-exports",
+      "Region": "us-west-2",
+      "Arn": "arn:aws:s3:::data-warehouse-exports",
+      "CreationDate": "2024-03-22T16:45:00Z"
+    }
+  ]
+}

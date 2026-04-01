@@ -1,0 +1,26 @@
+{
+  "module_name": "gcp.compute.instances",
+  "api_name": "instances_list",
+  "recorded_at": "2026-03-15T12:00:00+00:00",
+  "schema_version": "1.0",
+  "response_data": [
+    {
+      "partial_uri": "projects/acme-prod-123/zones/us-central1-a/instances/web-server-01",
+      "selfLink": "https://www.googleapis.com/compute/v1/projects/acme-prod-123/zones/us-central1-a/instances/web-server-01",
+      "name": "web-server-01",
+      "hostname": "web-server-01.us-central1-a.c.acme-prod-123.internal",
+      "zone_name": "us-central1-a",
+      "project_id": "acme-prod-123",
+      "status": "RUNNING"
+    },
+    {
+      "partial_uri": "projects/acme-prod-123/zones/us-central1-b/instances/api-server-01",
+      "selfLink": "https://www.googleapis.com/compute/v1/projects/acme-prod-123/zones/us-central1-b/instances/api-server-01",
+      "name": "api-server-01",
+      "hostname": null,
+      "zone_name": "us-central1-b",
+      "project_id": "acme-prod-123",
+      "status": "RUNNING"
+    }
+  ]
+}

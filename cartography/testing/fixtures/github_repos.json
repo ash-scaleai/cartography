@@ -1,0 +1,73 @@
+{
+  "module_name": "github.repos",
+  "api_name": "get_repos",
+  "recorded_at": "2026-03-15T12:00:00+00:00",
+  "schema_version": "1.0",
+  "response_data": [
+    {
+      "name": "cartography",
+      "nameWithOwner": "acmecorp/cartography",
+      "url": "https://github.com/acmecorp/cartography",
+      "sshUrl": "git@github.com:acmecorp/cartography.git",
+      "createdAt": "2022-05-10T10:00:00Z",
+      "description": "Infrastructure graph tool",
+      "updatedAt": "2026-03-10T18:30:00Z",
+      "homepageUrl": "https://cartography-cncf.github.io/cartography/",
+      "primaryLanguage": {
+        "name": "Python"
+      },
+      "languages": {
+        "totalCount": 2,
+        "nodes": [
+          {"name": "Python"},
+          {"name": "Cypher"}
+        ]
+      },
+      "defaultBranchRef": {
+        "name": "main",
+        "id": "MDM6UmVmMTIzNDU2Nzg5"
+      },
+      "isPrivate": false,
+      "isArchived": false,
+      "isDisabled": false,
+      "isLocked": false,
+      "owner": {
+        "url": "https://github.com/acmecorp",
+        "login": "acmecorp",
+        "__typename": "Organization"
+      }
+    },
+    {
+      "name": "infra-configs",
+      "nameWithOwner": "acmecorp/infra-configs",
+      "url": "https://github.com/acmecorp/infra-configs",
+      "sshUrl": "git@github.com:acmecorp/infra-configs.git",
+      "createdAt": "2023-08-01T14:20:00Z",
+      "description": "Terraform configurations",
+      "updatedAt": "2026-02-28T09:00:00Z",
+      "homepageUrl": "",
+      "primaryLanguage": {
+        "name": "HCL"
+      },
+      "languages": {
+        "totalCount": 1,
+        "nodes": [
+          {"name": "HCL"}
+        ]
+      },
+      "defaultBranchRef": {
+        "name": "main",
+        "id": "MDM6UmVmOTg3NjU0MzIx"
+      },
+      "isPrivate": true,
+      "isArchived": false,
+      "isDisabled": false,
+      "isLocked": false,
+      "owner": {
+        "url": "https://github.com/acmecorp",
+        "login": "acmecorp",
+        "__typename": "Organization"
+      }
+    }
+  ]
+}

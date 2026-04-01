@@ -1,0 +1,28 @@
+{
+  "module_name": "aws.iam.users",
+  "api_name": "list_users",
+  "recorded_at": "2026-03-15T12:00:00+00:00",
+  "schema_version": "1.0",
+  "response_data": [
+    {
+      "arn": "arn:aws:iam::111122223333:user/alice",
+      "userid": "AIDAEXAMPLE1111111111",
+      "name": "alice",
+      "path": "/engineering/",
+      "createdate": "2024-06-15T10:30:00Z",
+      "createdate_dt": "2024-06-15T10:30:00+00:00",
+      "passwordlastused": "2026-03-14T08:00:00Z",
+      "passwordlastused_dt": "2026-03-14T08:00:00+00:00"
+    },
+    {
+      "arn": "arn:aws:iam::111122223333:user/bob",
+      "userid": "AIDAEXAMPLE2222222222",
+      "name": "bob",
+      "path": "/ops/",
+      "createdate": "2025-01-10T14:00:00Z",
+      "createdate_dt": "2025-01-10T14:00:00+00:00",
+      "passwordlastused": null,
+      "passwordlastused_dt": null
+    }
+  ]
+}
