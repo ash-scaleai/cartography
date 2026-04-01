@@ -12,6 +12,8 @@ from typing import Union
 
 import neo4j
 
+from cartography.graph.cleanup_safety import DEFAULT_CLEANUP_THRESHOLD
+from cartography.graph.cleanup_safety import should_skip_cleanup
 from cartography.graph.cleanupbuilder import build_cleanup_queries
 from cartography.graph.cleanupbuilder import build_cleanup_query_for_matchlink
 from cartography.graph.statement import get_job_shortname
@@ -252,6 +254,53 @@ class GraphJob:
             else f"Finished job {self.name}"
         )
         logger.info(log_msg)
+
+    def run_with_safety(
+        self,
+        neo4j_session: neo4j.Session,
+        current_record_count: int,
+        threshold: float = DEFAULT_CLEANUP_THRESHOLD,
+        skip_safety: bool = False,
+    ) -> None:
+        """
+        Execute the cleanup job with an optional safety net check.
+
+        Before running cleanup, this method compares the current record count against the
+        previous run's count stored in Neo4j. If the current count has dropped below
+        the configured threshold ratio, cleanup is skipped to prevent accidental deletion
+        of valid data (e.g., from a partial API response or a mid-sync crash).
+
+        Args:
+            neo4j_session (neo4j.Session): The Neo4j session to use for execution.
+            current_record_count (int): The number of records fetched in the current sync.
+            threshold (float): The minimum ratio (0.0-1.0) of current/previous record
+                counts required to proceed with cleanup. Default is 0.5 (50%).
+            skip_safety (bool): If True, bypass the safety check entirely and always
+                run cleanup. Default is False.
+        """
+        module_name = self.short_name or self.name
+
+        if skip_safety:
+            logger.debug(
+                "Cleanup safety net disabled for %s. Running cleanup unconditionally.",
+                module_name,
+            )
+            self.run(neo4j_session)
+            return
+
+        if should_skip_cleanup(
+            neo4j_session,
+            module_name,
+            current_record_count,
+            threshold,
+        ):
+            logger.warning(
+                "Cleanup for %s was SKIPPED by the safety net.",
+                module_name,
+            )
+            return
+
+        self.run(neo4j_session)
 
     def as_dict(self) -> Dict:
         """

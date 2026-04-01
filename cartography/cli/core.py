@@ -370,6 +370,31 @@ class CLI:
                     rich_help_panel=PANEL_CORE,
                 ),
             ] = False,
+            cleanup_threshold: Annotated[
+                float,
+                typer.Option(
+                    "--cleanup-threshold",
+                    help=(
+                        "Minimum ratio (0.0-1.0) of current vs. previous record counts required "
+                        "to proceed with cleanup. If the current count drops below this fraction "
+                        "of the previous count, cleanup is skipped as a safety net. Default: 0.5."
+                    ),
+                    min=0.0,
+                    max=1.0,
+                    rich_help_panel=PANEL_CORE,
+                ),
+            ] = 0.5,
+            skip_cleanup_safety: Annotated[
+                bool,
+                typer.Option(
+                    "--skip-cleanup-safety",
+                    help=(
+                        "Disable the cleanup safety net entirely. When set, cleanup always runs "
+                        "regardless of record count changes between sync runs."
+                    ),
+                    rich_help_panel=PANEL_CORE,
+                ),
+            ] = False,
             # =================================================================
             # Neo4j Connection Options
             # =================================================================
@@ -1830,6 +1855,8 @@ class CLI:
                 statsd_host=statsd_host,
                 statsd_port=statsd_port,
                 async_fetch=async_fetch,
+                cleanup_threshold=cleanup_threshold,
+                skip_cleanup_safety=skip_cleanup_safety,
                 **config_kwargs,
             )
 

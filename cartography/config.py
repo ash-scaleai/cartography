@@ -286,6 +286,13 @@ class Config:
     :type async_fetch: bool
     :param async_fetch: If True, run independent provider sync stages concurrently using asyncio.
         Default is False (sequential execution). Optional.
+    :type cleanup_threshold: float
+    :param cleanup_threshold: The minimum ratio (0.0-1.0) of current/previous record counts required to proceed
+        with cleanup. If the current count drops below this fraction of the previous count, cleanup is skipped
+        as a safety net to prevent accidental data loss. Default is 0.5 (50%). Optional.
+    :type skip_cleanup_safety: bool
+    :param skip_cleanup_safety: If True, disable the cleanup safety net entirely and always run cleanup
+        regardless of record count changes. Default is False. Optional.
     """
 
     def __init__(
@@ -434,6 +441,8 @@ class Config:
         neo4j_max_connection_pool_size=None,
         neo4j_connection_acquisition_timeout=None,
         async_fetch=False,
+        cleanup_threshold=0.5,
+        skip_cleanup_safety=False,
     ):
         self.neo4j_uri = neo4j_uri
         self.neo4j_user = neo4j_user
@@ -581,3 +590,5 @@ class Config:
         self.jumpcloud_api_key = jumpcloud_api_key
         self.jumpcloud_org_id = jumpcloud_org_id
         self.async_fetch = async_fetch
+        self.cleanup_threshold = cleanup_threshold
+        self.skip_cleanup_safety = skip_cleanup_safety
