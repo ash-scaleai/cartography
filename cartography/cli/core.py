@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING
 import typer
 from typing_extensions import Annotated
 
+from cartography.cli.registry import CLIPluginRegistry
+from cartography.cli.registry import discover_cli_plugins
 from cartography.config import Config
 from cartography.version import get_release_version_and_commit_revision
 
@@ -143,6 +145,11 @@ def _parse_selected_modules_from_argv(
 ) -> set[str]:
     """
     Pre-parse argv to extract --selected-modules value for dynamic help visibility.
+
+    Args:
+        argv: The command line arguments.
+        registry: Optional CLI plugin registry. If provided, its panel mappings
+            are merged with the built-in MODULE_PANELS.
 
     Returns:
         Set of visible panel names. If no modules specified, returns all panels.
@@ -1860,8 +1867,54 @@ class CLI:
                 **config_kwargs,
             )
 
+            # Process plugin CLI args and merge into config
+            if registry is not None:
+                import click
+
+                ctx = click.get_current_context()
+                plugin_args = ctx.params
+                for plugin in registry.plugins:
+                    try:
+                        plugin_config = plugin.process_cli_args(plugin_args)
+                        for key, value in plugin_config.items():
+                            if hasattr(config, key):
+                                setattr(config, key, value)
+                            else:
+                                logger.debug(
+                                    "Plugin '%s' returned config key '%s' not in Config; "
+                                    "attaching as dynamic attribute.",
+                                    plugin.name,
+                                    key,
+                                )
+                                setattr(config, key, value)
+                    except Exception:
+                        logger.warning(
+                            "Failed to process CLI args for plugin '%s'. Skipping.",
+                            plugin.name,
+                            exc_info=True,
+                        )
+
             # Run the sync
             cartography.sync.run_with_config(sync, config)
+
+        # Inject dynamically discovered plugin options into the Click command.
+        # Typer wraps Click, so we can access the underlying Click command's
+        # params list and append our plugin-provided Click Options.
+        if registry is not None:
+            # The Typer app registers commands lazily; get the Click group
+            # and find the registered command.
+            click_app = typer.main.get_command(app)
+            # For a single-command Typer app, click_app is the command itself
+            if hasattr(click_app, "params"):
+                for plugin in registry.plugins:
+                    try:
+                        plugin.add_arguments(click_app.params, visible_panels)
+                    except Exception:
+                        logger.warning(
+                            "Failed to add CLI arguments for plugin '%s'. Skipping.",
+                            plugin.name,
+                            exc_info=True,
+                        )
 
         return app
 

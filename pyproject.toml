@@ -162,6 +162,10 @@ aws = "cartography.intel.aws:start_aws_ingestion"
 github = "cartography.intel.github:start_github_ingestion"
 gcp = "cartography.intel.gcp:start_gcp_ingestion"
 
+# External CLI plugins register here. Example:
+# [project.entry-points."cartography.cli_plugins"]
+# my_provider = "my_package.cli_plugin"
+
 [tool.setuptools.package-data]
 "cartography" = ["py.typed"]
 "cartography.data" = ["*.cypher", "*.yaml"]

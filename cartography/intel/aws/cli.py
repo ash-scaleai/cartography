@@ -2,7 +2,8 @@
 AWS CLI option definitions for cartography.
 
 This module defines all AWS-specific command-line options and the logic
-to process them into Config-compatible keyword arguments.
+to process them into Config-compatible keyword arguments. It serves both
+the Typer-based CLI (Phase 0.3) and the plugin registry (Feature 4).
 """
 import logging
 import os
@@ -100,6 +101,36 @@ OPTION_DEFINITIONS: list[tuple[str, type, str, str, Any, dict[str, Any]]] = [
         {},
     ),
 ]
+
+
+def add_arguments(params: list, visible_panels: set[str]) -> None:
+    """
+    Add AWS-specific CLI options to a Click command's params list.
+
+    Used by the CLI plugin registry for dynamic provider discovery.
+
+    Args:
+        params: The Click command's params list to append to.
+        visible_panels: Set of panel names that should be visible in --help.
+    """
+    try:
+        import click
+    except ImportError:
+        return
+
+    hidden = PANEL not in visible_panels
+
+    for param_name, _, cli_flag, help_text, default, _ in OPTION_DEFINITIONS:
+        is_flag = isinstance(default, bool)
+        params.append(
+            click.Option(
+                [cli_flag],
+                is_flag=is_flag,
+                default=default,
+                help=help_text,
+                hidden=hidden,
+            ),
+        )
 
 
 def process_cli_args(args: dict[str, Any]) -> dict[str, Any]:
